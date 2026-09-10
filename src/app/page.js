@@ -1,62 +1,93 @@
-import Footer from './components/Footer';
+'use client';
+
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight } from 'lucide-react';
+import { supabase } from '@/app/supabase';
+import Navbar from '@/app/components/Navbar';
+import Footer from '@/app/components/Footer';
+import { Sparkles, Newspaper, ChevronRight } from 'lucide-react';
 
 export default function Home() {
-  return (
-    <>
-      <main className="flex-1 max-w-5xl mx-auto w-full px-8 py-16">
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-12 border-b border-neutral-800 pb-16">
-          <div className="lg:col-span-8 flex flex-col justify-between">
-            <div>
-              <span className="text-xs font-mono uppercase tracking-widest text-emerald-400 mb-4 block">
-                Featured Lead
-              </span>
-              <h1 className="text-5xl md:text-6xl font-serif font-bold tracking-tight leading-tight mb-6">
-                Empowering Student Voices & Campus Journalism.
-              </h1>
-              <p className="text-neutral-400 text-lg leading-relaxed max-w-2xl mb-8">
-                Welcome to the central pulse of our school platform—where students write stories, teachers post announcements, and clubs connect the community.
-              </p>
-            </div>
-            
-            <div className="flex gap-4">
-              <Link 
-                href="/news" 
-                className="inline-flex items-center gap-2 bg-white text-black font-semibold px-6 py-3 rounded-full hover:bg-neutral-200 transition"
-              >
-                Read Stories
-                <ArrowUpRight className="w-4 h-4" />
-              </Link>
-            </div>
-          </div>
+  const [latestNews, setLatestNews] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-          <div className="lg:col-span-4 bg-neutral-900 border border-neutral-800 rounded-2xl p-6 flex flex-col justify-between">
+  useEffect(() => {
+    async function fetchHomeData() {
+      setLoading(true);
+      
+      const { data: newsData } = await supabase
+        .from('posts')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(3);
+
+      setLatestNews(newsData || []);
+      setLoading(false);
+    }
+
+    fetchHomeData();
+  }, []);
+
+  return (
+    <div className="min-h-screen theme-bg-page theme-text-primary flex flex-col selection:bg-emerald-500 selection:text-black">
+      <Navbar />
+
+      <section className="relative py-24 border-b theme-border overflow-hidden bg-emerald-500/5">
+        <div className="max-w-7xl mx-auto px-6 relative z-10">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-mono mb-4 uppercase font-semibold">
+            <Sparkles className="w-3.5 h-3.5" /> Welcome to Xonqa Tuman
+          </div>
+          <h1 className="text-4xl md:text-6xl font-serif font-bold tracking-tight max-w-3xl mb-6">
+            Shaping Future Leaders of Xorazm
+          </h1>
+          <p className="text-sm md:text-base theme-text-secondary max-w-xl leading-relaxed">
+            Discover our modern educational programs, active student clubs, and vibrant school community platform.
+          </p>
+        </div>
+      </section>
+
+      <section className="py-16 border-t theme-border theme-bg-card/50 flex-grow">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="flex items-center justify-between mb-8">
             <div>
-              <h2 className="font-serif text-2xl font-bold mb-4">Latest Bulletins</h2>
-              <div className="space-y-4">
-                <div className="border-b border-neutral-800 pb-3">
-                  <span className="text-xs text-neutral-500 font-mono">TODAY</span>
-                  <p className="text-sm font-medium hover:text-emerald-400 cursor-pointer mt-1">
-                    Annual Science Fair registrations open next week.
-                  </p>
-                </div>
-                <div className="border-b border-neutral-800 pb-3">
-                  <span className="text-xs text-neutral-500 font-mono">YESTERDAY</span>
-                  <p className="text-sm font-medium hover:text-emerald-400 cursor-pointer mt-1">
-                    Debate Club wins regional finals in dramatic finish.
-                  </p>
-                </div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-mono mb-2 uppercase font-semibold">
+                <Newspaper className="w-3.5 h-3.5" /> Updates
               </div>
+              <h2 className="text-2xl font-serif font-bold theme-text-primary">Latest News & Press</h2>
             </div>
-            <Link href="/news" className="text-xs font-mono uppercase text-neutral-400 hover:text-white flex items-center gap-1 mt-6">
-              View All Bulletins →
+            <Link
+              href="/news"
+              className="text-xs font-semibold text-emerald-500 flex items-center gap-1 hover:underline"
+            >
+              View All <ChevronRight className="w-4 h-4" />
             </Link>
           </div>
-        </section>
-      </main>
-      
+
+          {loading ? (
+            <div className="text-center py-12 font-mono text-xs theme-text-secondary">Loading stories...</div>
+          ) : latestNews.length === 0 ? (
+            <div className="text-center py-12 border theme-border rounded-2xl theme-bg-card">
+              <p className="text-xs theme-text-secondary">No news articles published yet.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {latestNews.map((post) => (
+                <article key={post.id} className="theme-bg-card border theme-border rounded-2xl p-6 flex flex-col justify-between shadow-sm">
+                  <div>
+                    <span className="text-[10px] font-mono theme-text-secondary block mb-2">
+                      {new Date(post.created_at).toLocaleDateString()}
+                    </span>
+                    <h3 className="text-base font-serif font-bold theme-text-primary mb-2 line-clamp-2">{post.title}</h3>
+                    <p className="text-xs theme-text-secondary line-clamp-3">{post.content}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
       <Footer />
-    </>
+    </div>
   );
 }
