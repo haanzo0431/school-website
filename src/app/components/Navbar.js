@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Newspaper, Users, LogIn, PenSquare, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Newspaper, Users, LogIn, PenSquare, ChevronLeft, ChevronRight, Settings } from 'lucide-react';
 import { supabase } from '../supabase';
 
 export default function Navbar() {
@@ -142,25 +142,35 @@ export default function Navbar() {
           </Link>
         )}
         
-        <Link 
-          href={user ? "/profile" : "/login"}
-          className={`flex items-center pt-4 border-t theme-border w-full hover:opacity-80 transition-opacity ${isCollapsed ? 'justify-center' : 'gap-3'}`}
-        >
-          <div className="w-9 h-9 rounded-full theme-bg-input border theme-border flex items-center justify-center text-sm font-bold theme-text-primary flex-shrink-0 overflow-hidden">
-            {profile?.avatar_url ? (
-              <img 
-                src={profile.avatar_url} 
-                alt="Avatar" 
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              avatarLetter
-            )}
-          </div>
-          <span className={`text-sm font-medium theme-text-primary whitespace-nowrap transition-opacity duration-300 ${isCollapsed ? 'opacity-0 hidden' : 'opacity-100'}`}>
-            {displayName}
-          </span>
-        </Link>
+        <div className={`flex items-center pt-4 border-t theme-border w-full ${isCollapsed ? 'flex-col gap-4' : 'justify-between gap-2'}`}>
+          <Link 
+            href={user ? "/profile" : "/login"}
+            className={`flex items-center hover:opacity-80 transition-opacity flex-1 min-w-0 ${isCollapsed ? 'justify-center' : 'gap-3'}`}
+          >
+            <div className="w-9 h-9 rounded-full theme-bg-input border theme-border flex items-center justify-center text-sm font-bold theme-text-primary flex-shrink-0 overflow-hidden">
+              {profile?.avatar_url ? (
+                <img 
+                  src={profile.avatar_url} 
+                  alt="Avatar" 
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                avatarLetter
+              )}
+            </div>
+            <span className={`text-sm font-medium theme-text-primary truncate transition-opacity duration-300 ${isCollapsed ? 'opacity-0 hidden' : 'opacity-100'}`}>
+              {displayName}
+            </span>
+          </Link>
+
+          <Link
+            href="/profile"
+            className="p-1.5 rounded-md theme-text-secondary hover:theme-text-primary hover:bg-white/5 transition-colors flex-shrink-0"
+            title="Settings"
+          >
+            <Settings className="w-5 h-5" />
+          </Link>
+        </div>
       </div>
     </aside>
   );
