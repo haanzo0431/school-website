@@ -37,16 +37,12 @@ export default function LoginPage() {
 
     // 1. Smart Email / ID formatting
     if (cleanId.includes('@')) {
-      // User typed full email (e.g. admin@xonqa.school)
       formattedEmail = cleanId.toLowerCase();
     } else if (upperId === 'ADMIN') {
-      // User typed "admin" directly
       formattedEmail = 'admin@xonqa.school';
     } else if (upperId.startsWith('A-')) {
-      // User typed custom admin ID (e.g. A-4758393882)
       formattedEmail = `${cleanId.toLowerCase()}@xonqa.school`;
     } else {
-      // Standard student/teacher/parent login with prefix auto-addition
       let prefix = rolePrefixes[role];
       if (!upperId.startsWith(prefix)) {
         cleanId = `${prefix}${cleanId}`;
@@ -66,7 +62,7 @@ export default function LoginPage() {
       return;
     }
 
-    // 3. Fetch user's role from profiles table to determine redirect target
+    // 3. Fetch user's role from profiles table
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
@@ -74,8 +70,10 @@ export default function LoginPage() {
       .single();
 
     // 4. Smart Redirect
-    if (profile?.role === 'admin') {
-      router.push('/admin');
+    const isAdmin = profile?.role === 'admin' || formattedEmail === 'admin@xonqa.school' || formattedEmail.startsWith('a-');
+
+    if (isAdmin) {
+      router.push('/admin/classes');
     } else {
       router.push('/platform');
     }

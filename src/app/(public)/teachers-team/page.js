@@ -123,6 +123,32 @@ const teachersList = [
       'Certified Google for Education Trainer.',
     ],
   },
+  {
+    id: 5,
+    name: 'O\'ktamboyev Aziz',
+    subjectKey: 'physics',
+    subjectName: 'Physics & Engineering Mechanics',
+    experience: 15,
+    email: 'a.oktamboyev@xonqa.school',
+    avatarText: 'AO',
+    education: 'National University of Uzbekistan (Ph.D. Candidate Physics)',
+    bio: 'Passionate physics teacher integrating hands-on laboratory experiments, robotics, and theoretical physics.',
+    certificates: [
+      { name: 'Ph.D. Research Scholar in Physics', score: 'Candidate' },
+      { name: 'National Physics Mentor License', score: 'Master Level' },
+      { name: 'STEM Robotics Instructor Certification', score: 'Level 2' },
+    ],
+    studentScores: [
+      { metric: 'Physics National Exam Average', value: '92 / 100', note: 'Ranked #1 in District' },
+      { metric: 'Robotics Competition Finalists', value: '6 Teams', note: 'National Level' },
+      { metric: 'Engineering Uni Admissions', value: '45+ Students', note: 'TUIT, Turin, Inha' },
+    ],
+    achievements: [
+      'Mentored the 1st place winning team in Xorazm Regional Robotics Expo.',
+      'Published 5 research papers in national physics journals.',
+      'Established the school laboratory modern physics workshop.',
+    ],
+  },
 ];
 
 const SUBJECT_NAMES = {

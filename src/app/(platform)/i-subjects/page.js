@@ -1,99 +1,118 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { 
   BookOpen, User, Clock, Building, 
-  Search, Sparkles, GraduationCap 
+  Search, Sparkles, GraduationCap, ArrowRight, Calendar
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
-const DEFAULT_SUBJECTS = [
-  {
-    id: 1,
-    name: 'Mathematics & Algebra',
-    teacher: 'A. Karimov',
-    room: 'Room 204',
-    schedule: 'Mon, Wed, Fri (09:00 - 09:45)',
-    topics: 'Quadratic Equations, Functions & Graphs',
-    iconColor: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  },
-  {
-    id: 2,
-    name: 'Physics',
-    teacher: 'M. Sobirova',
-    room: 'Lab 102',
-    schedule: 'Tue, Thu (10:00 - 10:45)',
-    topics: 'Kinematics, Newton’s Laws of Motion',
-    iconColor: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  },
-  {
-    id: 3,
-    name: 'English Language',
-    teacher: 'D. Aliyeva',
-    room: 'Room 305',
-    schedule: 'Mon, Wed (11:00 - 11:45)',
-    topics: 'Academic Writing & IELTS Preparation',
-    iconColor: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-  },
-  {
-    id: 4,
-    name: 'Information Technology',
-    teacher: 'S. Rahimov',
-    room: 'Comp Lab 1',
-    schedule: 'Tue, Fri (12:00 - 12:45)',
-    topics: 'Web Development Basics, Python Scripting',
-    iconColor: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  },
-  {
-    id: 5,
-    name: 'History of Uzbekistan',
-    teacher: 'O. Toshpulatov',
-    room: 'Room 108',
-    schedule: 'Thu (09:00 - 09:45)',
-    topics: 'Silk Road Civilizations & Khanates',
-    iconColor: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
-  },
-  {
-    id: 6,
-    name: 'Chemistry',
-    teacher: 'N. Abdullayeva',
-    room: 'Lab 201',
-    schedule: 'Wed, Fri (14:00 - 14:45)',
-    topics: 'Periodic Table & Chemical Bonding',
-    iconColor: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
-  },
-];
+const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
 export default function StudentSubjectsPage() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [studentClass, setStudentClass] = useState('10-A');
+  const [studentClass, setStudentClass] = useState('');
+  const [schedules, setSchedules] = useState([]);
+  const [selectedDay, setSelectedDay] = useState('All');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function loadUserClass() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
+    async function fetchStudentCurriculum() {
+      try {
+        setLoading(true);
+
+        // 1. Get logged-in user
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        // 2. Fetch student's assigned class name from profile
+        const { data: profileData } = await supabase
           .from('profiles')
           .select('class')
           .eq('id', user.id)
           .single();
-        if (data?.class) setStudentClass(data.class);
+
+        const className = profileData?.class || '10-A';
+        setStudentClass(className);
+
+        // 3. Get matching class ID
+        const { data: classData } = await supabase
+          .from('classes')
+          .select('id')
+          .eq('name', className)
+          .single();
+
+        if (classData) {
+          // 4. Fetch schedules joined with Subjects and Teacher Profiles
+          const { data: scheduleData, error } = await supabase
+            .from('schedules')
+            .select(`
+              id,
+              day_of_week,
+              start_time,
+              end_time,
+              room,
+              current_topic,
+              subjects ( id, name, icon_color ),
+              profiles:teacher_id ( name, surname, first_name, last_name )
+            `)
+            .eq('class_id', classData.id);
+
+          if (!error && scheduleData) {
+            setSchedules(scheduleData);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading curriculum:', err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
-    loadUserClass();
+
+    fetchStudentCurriculum();
   }, []);
 
-  const filteredSubjects = DEFAULT_SUBJECTS.filter((sub) =>
-    sub.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    sub.teacher.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Group schedules by subject to present consolidated subject cards
+  const subjectsMap = {};
+  schedules.forEach((item) => {
+    const subId = item.subjects?.id || item.id;
+    const teacherName = item.profiles 
+      ? `${item.profiles.name || item.profiles.first_name || ''} ${item.profiles.surname || item.profiles.last_name || ''}`.trim()
+      : 'Unassigned';
+
+    if (!subjectsMap[subId]) {
+      subjectsMap[subId] = {
+        id: subId,
+        name: item.subjects?.name || 'Subject',
+        teacher: teacherName,
+        room: item.room,
+        topics: item.current_topic || 'Standard Curriculum',
+        iconColor: item.subjects?.icon_color || 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+        slots: [],
+      };
+    }
+
+    subjectsMap[subId].slots.push({
+      day: item.day_of_week,
+      time: `${item.start_time?.slice(0, 5)} - ${item.end_time?.slice(0, 5)}`,
+    });
+  });
+
+  const subjectsList = Object.values(subjectsMap);
+
+  // Filter subjects by search keyword and day tab
+  const filteredSubjects = subjectsList.filter((sub) => {
+    const matchesSearch = sub.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          sub.teacher.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesDay = selectedDay === 'All' || sub.slots.some(s => s.day === selectedDay);
+    return matchesSearch && matchesDay;
+  });
 
   if (loading) {
     return (
-      <div className="p-10 flex items-center justify-center text-xs font-mono theme-text-secondary">
-        Loading curriculum data...
+      <div className="p-10 flex items-center justify-center text-xs font-mono theme-text-secondary min-h-[50vh]">
+        Loading curriculum for Class {studentClass}...
       </div>
     );
   }
@@ -106,9 +125,9 @@ export default function StudentSubjectsPage() {
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono mb-2">
             <GraduationCap className="w-3.5 h-3.5" /> Class {studentClass} Curriculum
           </div>
-          <h1 className="text-3xl font-serif font-bold">My Subjects</h1>
+          <h1 className="text-3xl font-serif font-bold">My Subjects & Schedule</h1>
           <p className="text-xs theme-text-secondary mt-1">
-            Overview of your active school subjects, schedule, and teachers.
+            Dynamic timetable and instructor details synced to your class profile.
           </p>
         </div>
 
@@ -125,55 +144,107 @@ export default function StudentSubjectsPage() {
         </div>
       </div>
 
+      {/* Weekday Schedule Filter Tabs */}
+<div className="flex items-center gap-2 overflow-x-auto pb-2 border-b theme-border text-xs font-mono">
+  <button
+    onClick={() => setSelectedDay('All')}
+    className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors duration-150 shrink-0 select-none ${
+      selectedDay === 'All'
+        ? 'bg-emerald-500 text-black shadow-sm'
+        : 'theme-bg-card border theme-border theme-text-secondary hover:theme-text-primary'
+    }`}
+  >
+    All Days
+  </button>
+  {DAYS_OF_WEEK.map((day) => (
+    <button
+      key={day}
+      onClick={() => setSelectedDay(day)}
+      className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors duration-150 shrink-0 select-none ${
+        selectedDay === day
+          ? 'bg-emerald-500 text-black shadow-sm'
+          : 'theme-bg-card border theme-border theme-text-secondary hover:theme-text-primary'
+      }`}
+    >
+      {day}
+    </button>
+  ))}
+</div>
+
       {/* Grid of Subjects */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {filteredSubjects.map((subject) => (
-          <div
-            key={subject.id}
-            className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4 hover:border-emerald-500/30 transition-all flex flex-col justify-between"
-          >
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className={`p-2.5 rounded-2xl border ${subject.iconColor}`}>
-                  <BookOpen className="w-5 h-5" />
-                </span>
-                <span className="text-[10px] font-mono px-2.5 py-1 rounded-lg theme-bg-page border theme-border theme-text-secondary">
-                  Active
-                </span>
+      {filteredSubjects.length === 0 ? (
+        <div className="p-12 text-center rounded-3xl theme-bg-card border theme-border space-y-2">
+          <Calendar className="w-8 h-8 text-emerald-500 mx-auto opacity-60" />
+          <p className="text-sm font-semibold">No subjects scheduled for this selection.</p>
+          <p className="text-xs theme-text-secondary">Try selecting "All Days" or updating your search query.</p>
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {filteredSubjects.map((subject) => (
+            <div
+              key={subject.id}
+              className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4 hover:border-emerald-500/30 transition-all flex flex-col justify-between"
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className={`p-2.5 rounded-2xl border ${subject.iconColor}`}>
+                    <BookOpen className="w-5 h-5" />
+                  </span>
+                  <span className="text-[10px] font-mono px-2.5 py-1 rounded-lg theme-bg-page border theme-border text-emerald-400">
+                    Active
+                  </span>
+                </div>
+
+                <div>
+                  <h3 className="font-serif font-bold text-lg">{subject.name}</h3>
+                  <p className="text-xs theme-text-secondary flex items-center gap-1.5 mt-1">
+                    <User className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Instructor: {subject.teacher}</span>
+                  </p>
+                </div>
+
+                {/* Day-by-Day Schedule Slots */}
+                <div className="pt-2 border-t theme-border space-y-1.5 text-xs">
+                  <div className="flex items-center gap-2 theme-text-secondary mb-1">
+                    <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span className="font-mono text-[10px] uppercase tracking-wider">Schedule Slots:</span>
+                  </div>
+                  {subject.slots.map((slot, idx) => (
+                    <div key={idx} className="flex items-center justify-between px-2.5 py-1.5 rounded-lg theme-bg-page border theme-border text-[11px] font-mono">
+                      <span className="text-emerald-400 font-semibold">{slot.day}</span>
+                      <span className="theme-text-secondary">{slot.time}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 theme-text-secondary pt-1">
+                    <Building className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span>{subject.room}</span>
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <h3 className="font-serif font-bold text-lg">{subject.name}</h3>
-                <p className="text-xs theme-text-secondary flex items-center gap-1.5 mt-1">
-                  <User className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>Instructor: {subject.teacher}</span>
-                </p>
-              </div>
+              {/* Unit & Classwork Action */}
+              <div className="mt-4 pt-3 border-t theme-border flex items-end justify-between gap-3">
+                <div className="overflow-hidden">
+                  <span className="text-[10px] font-mono theme-text-secondary block mb-1 uppercase tracking-wider">
+                    Current Unit
+                  </span>
+                  <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5 truncate">
+                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{subject.topics}</span>
+                  </p>
+                </div>
 
-              <div className="pt-2 border-t theme-border space-y-2 text-xs">
-                <div className="flex items-center gap-2 theme-text-secondary">
-                  <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  <span>{subject.schedule}</span>
-                </div>
-                <div className="flex items-center gap-2 theme-text-secondary">
-                  <Building className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  <span>{subject.room}</span>
-                </div>
+                <Link
+                  href="/i-assignments"
+                  className="shrink-0 text-[11px] font-mono font-medium px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-all flex items-center gap-1"
+                >
+                  Classwork <ArrowRight className="w-3 h-3" />
+                </Link>
               </div>
             </div>
-
-            <div className="mt-4 pt-3 border-t theme-border">
-              <span className="text-[10px] font-mono theme-text-secondary block mb-1 uppercase tracking-wider">
-                Current Unit
-              </span>
-              <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">{subject.topics}</span>
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

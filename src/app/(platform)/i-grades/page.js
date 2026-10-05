@@ -2,40 +2,40 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  Award, BookOpen, TrendingUp, CheckCircle2, 
-  AlertCircle, Loader2, User 
+  Award, BookOpen, TrendingUp, Loader2 
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
 export default function StudentGradebookPage() {
-  const [userProfile, setUserProfile] = useState(null);
   const [grades, setGrades] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function loadUserAndGrades() {
+    async function loadGrades() {
       setLoading(true);
       try {
-        // 1. Get logged-in user
         const { data: { user } } = await supabase.auth.getUser();
         
         if (user) {
-          // 2. Fetch profile
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', user.id)
-            .single();
-
-          if (profile) setUserProfile(profile);
-
-          // 3. Fetch grades for current student
-          const { data: gradesData } = await supabase
+          const { data: gradesData, error: gradesError } = await supabase
             .from('grades')
             .select('*')
             .eq('student_id', user.id);
 
-          setGrades(gradesData || []);
+          if (gradesError) {
+            console.error('Error fetching grades:', gradesError);
+          }
+
+          // Deduplicate items (keeps latest record per subject)
+          const deduplicated = {};
+          (gradesData || []).forEach((item) => {
+            const key = (item.subject || item.subject_name || 'unknown').toLowerCase().trim();
+            if (!deduplicated[key] || item.id > deduplicated[key].id) {
+              deduplicated[key] = item;
+            }
+          });
+
+          setGrades(Object.values(deduplicated));
         }
       } catch (err) {
         console.error('Error fetching student gradebook:', err.message);
@@ -44,58 +44,49 @@ export default function StudentGradebookPage() {
       }
     }
 
-    loadUserAndGrades();
+    loadGrades();
   }, []);
 
-  // GPA & Stat Calculations
+  // Safe GPA & Stat Calculations
   const calculateAverage = (g) => {
-    const scores = [g.q1, g.q2, g.exam].filter((val) => typeof val === 'number');
-    if (scores.length === 0) return 0;
-    return (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
+    const rawScores = [g.q1, g.q2, g.exam];
+    const validScores = rawScores
+      .map((val) => (val !== null && val !== undefined && val !== '' ? Number(val) : NaN))
+      .filter((num) => !isNaN(num));
+
+    if (validScores.length === 0) return '0.0';
+    const sum = validScores.reduce((a, b) => a + b, 0);
+    return (sum / validScores.length).toFixed(1);
   };
 
-  const gpa = grades.length > 0
-    ? (grades.reduce((acc, curr) => acc + parseFloat(calculateAverage(curr)), 0) / grades.length).toFixed(2)
-    : 'N/A';
+  const validGradesWithAvg = grades
+    .map((curr) => parseFloat(calculateAverage(curr)))
+    .filter((avg) => avg > 0);
+
+  const gpa = validGradesWithAvg.length > 0
+    ? (validGradesWithAvg.reduce((acc, curr) => acc + curr, 0) / validGradesWithAvg.length).toFixed(2)
+    : '0.00';
 
   if (loading) {
     return (
       <div className="p-16 flex flex-col items-center justify-center text-xs font-mono theme-text-secondary gap-3">
         <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
-        Loading your personal gradebook...
+        Loading personal gradebook...
       </div>
     );
   }
 
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
-      {/* Top Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
-        <div>
-          <span className="inline-block px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-semibold rounded-full mb-2 border border-emerald-500/20 font-mono">
-            Student Portal
-          </span>
-          <h1 className="text-3xl font-serif font-bold">Personal Gradebook</h1>
-          <p className="text-xs theme-text-secondary mt-1">
-            Detailed term breakdown, quarterly evaluations, and official subject marks.
-          </p>
-        </div>
-
-        {/* Read-Only Student Badge */}
-        <div className="flex items-center gap-3 theme-bg-card border theme-border px-4 py-2.5 rounded-2xl">
-          <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">
-            {userProfile?.name?.[0] || <User className="w-4 h-4" />}
-          </div>
-          <div>
-            <div className="text-[10px] font-mono theme-text-secondary">Logged-in Student</div>
-            <div className="text-xs font-bold text-white">
-              {userProfile ? `${userProfile.name} ${userProfile.surname}` : 'Student Account'} 
-              <span className="ml-1.5 text-[10px] font-mono text-emerald-400">
-                ({userProfile?.class_name || 'Class 10-A'})
-              </span>
-            </div>
-          </div>
-        </div>
+      {/* Clean Header */}
+      <div className="border-b theme-border pb-6">
+        <span className="inline-block px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-semibold rounded-full mb-2 border border-emerald-500/20 font-mono">
+          Student Portal
+        </span>
+        <h1 className="text-3xl font-serif font-bold">Personal Gradebook</h1>
+        <p className="text-xs theme-text-secondary mt-1">
+          Detailed term breakdown, quarterly evaluations, and official subject marks.
+        </p>
       </div>
 
       {/* Overview Cards */}
@@ -126,7 +117,9 @@ export default function StudentGradebookPage() {
           </div>
           <div>
             <div className="text-[10px] font-mono theme-text-secondary uppercase">Academic Standing</div>
-            <div className="text-sm font-bold text-amber-400">Honor Roll Candidate</div>
+            <div className="text-sm font-bold text-amber-400">
+              {parseFloat(gpa) >= 4.5 ? 'Honor Roll Candidate' : parseFloat(gpa) >= 3.5 ? 'Good Academic Standing' : 'Needs Academic Review'}
+            </div>
           </div>
         </div>
       </div>
@@ -159,20 +152,23 @@ export default function StudentGradebookPage() {
               <tbody className="divide-y theme-border">
                 {grades.map((g) => {
                   const avg = calculateAverage(g);
+                  const numericAvg = parseFloat(avg);
+                  const subjectTitle = g.subject || g.subject_name || 'Subject';
+
                   return (
                     <tr key={g.id} className="hover:bg-emerald-500/5 transition-colors">
-                      <td className="py-3.5 px-4 font-bold text-emerald-400">{g.subject_name}</td>
+                      <td className="py-3.5 px-4 font-bold text-emerald-400">{subjectTitle}</td>
                       <td className="py-3.5 px-4 font-mono">{g.q1 ?? '-'}</td>
                       <td className="py-3.5 px-4 font-mono">{g.q2 ?? '-'}</td>
                       <td className="py-3.5 px-4 font-mono">{g.exam ?? '-'}</td>
                       <td className="py-3.5 px-4 font-mono font-bold text-white">{avg}</td>
                       <td className="py-3.5 px-4">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
-                          parseFloat(avg) >= 4.5 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                          parseFloat(avg) >= 3.5 ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                          numericAvg >= 4.5 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                          numericAvg >= 3.5 ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
                           'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                         }`}>
-                          {parseFloat(avg) >= 4.5 ? 'Excellent' : parseFloat(avg) >= 3.5 ? 'Good' : 'Needs Focus'}
+                          {numericAvg >= 4.5 ? 'Excellent' : numericAvg >= 3.5 ? 'Good' : 'Needs Focus'}
                         </span>
                       </td>
                       <td className="py-3.5 px-4 theme-text-secondary italic max-w-xs truncate">
