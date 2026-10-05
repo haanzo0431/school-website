@@ -33,18 +33,26 @@ export default function LoginPage() {
 
     let cleanId = loginId.trim();
     const upperId = cleanId.toUpperCase();
+    let formattedEmail = '';
 
-    // 1. Auto-detect if user typed an Admin ID (A-...) directly
-    let prefix = rolePrefixes[role];
-    if (upperId.startsWith('A-')) {
-      prefix = 'A-';
+    // 1. Smart Email / ID formatting
+    if (cleanId.includes('@')) {
+      // User typed full email (e.g. admin@xonqa.school)
+      formattedEmail = cleanId.toLowerCase();
+    } else if (upperId === 'ADMIN') {
+      // User typed "admin" directly
+      formattedEmail = 'admin@xonqa.school';
+    } else if (upperId.startsWith('A-')) {
+      // User typed custom admin ID (e.g. A-4758393882)
+      formattedEmail = `${cleanId.toLowerCase()}@xonqa.school`;
+    } else {
+      // Standard student/teacher/parent login with prefix auto-addition
+      let prefix = rolePrefixes[role];
+      if (!upperId.startsWith(prefix)) {
+        cleanId = `${prefix}${cleanId}`;
+      }
+      formattedEmail = `${cleanId.toLowerCase()}@xonqa.school`;
     }
-
-    if (!upperId.startsWith(prefix)) {
-      cleanId = `${prefix}${cleanId}`;
-    }
-
-    const formattedEmail = `${cleanId.toLowerCase()}@xonqa.school`;
 
     // 2. Sign in with Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -143,7 +151,7 @@ export default function LoginPage() {
             <input
               type="text"
               required
-              placeholder="For Example: 12345"
+              placeholder="For Example: 12345 or admin"
               value={loginId}
               onChange={(e) => setLoginId(e.target.value)}
               className="w-full px-4 py-3 rounded-xl theme-bg-page border theme-border theme-text-primary text-xs focus:outline-none focus:border-emerald-500 font-mono"
