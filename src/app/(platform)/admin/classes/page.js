@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { 
   Users, Plus, Trash2, CheckCircle2, 
-  ShieldAlert, UserPlus, BookOpen, AlertCircle, RefreshCw, UserCheck
+  ShieldAlert, UserPlus, BookOpen, AlertCircle, RefreshCw, UserCheck, UserX
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
@@ -41,10 +41,10 @@ export default function AdminClassManagementPage() {
 
     // Explicitly reject admins, teachers, and parents
     if (['admin', 'teacher', 'parent', 'staff'].includes(role)) return false;
-    if (email.startsWith('admin') || email.startsWith('t-') || email.startsWith('p-') || email.startsWith('p ')) return false;
-    if (name.startsWith('admin') || name.startsWith('t-') || name.startsWith('p ') || name.startsWith('t ')) return false;
+    if (email.startsWith('admin') || email.startsWith('t-') || email.startsWith('p-')) return false;
+    if (name.startsWith('admin') || name.startsWith('t-') || name.startsWith('p ')) return false;
 
-    // Explicitly accept student roles or student email patterns (s-..., student...)
+    // Explicitly accept student roles or student email patterns
     if (role === 'student') return true;
     if (email.startsWith('s-') || email.startsWith('s.') || email.includes('student') || name.includes('student')) return true;
 
@@ -95,9 +95,13 @@ export default function AdminClassManagementPage() {
         .select('*')
         .order('name', { ascending: true });
 
-      const { data: profilesData } = await supabase
+      const { data: profilesData, error: profErr } = await supabase
         .from('profiles')
         .select('*');
+
+      if (profErr) {
+        console.error('Error loading profiles:', profErr);
+      }
 
       const profiles = profilesData || [];
       setAllProfiles(profiles);
@@ -240,7 +244,8 @@ export default function AdminClassManagementPage() {
     setSaving(true);
     const cleanedClassName = cleanName(selectedClass.name);
 
-    const { error } = await supabase
+    // Attempt updating both class and class_id
+    let { error } = await supabase
       .from('profiles')
       .update({ 
         class: cleanedClassName,
@@ -249,31 +254,65 @@ export default function AdminClassManagementPage() {
       })
       .eq('id', selectedStudentToAssign);
 
+    // Fallback if class_id column does not exist in schema
+    if (error && error.message?.includes('class_id')) {
+      const fallback = await supabase
+        .from('profiles')
+        .update({ 
+          class: cleanedClassName,
+          role: 'student'
+        })
+        .eq('id', selectedStudentToAssign);
+      error = fallback.error;
+    }
+
     if (!error) {
-      setMessage({ type: 'success', text: 'Student assigned to class roster!' });
+      setMessage({ type: 'success', text: `Student assigned to Class ${cleanedClassName}!` });
       setSelectedStudentToAssign('');
       await fetchInitialData();
     } else {
-      setMessage({ type: 'error', text: 'Failed to assign student.' });
+      console.error('Assign Error:', error);
+      setMessage({ type: 'error', text: `Failed to assign student: ${error.message || 'Permission denied'}` });
     }
     setSaving(false);
-    setTimeout(() => setMessage(null), 3500);
+    setTimeout(() => setMessage(null), 4000);
   }
 
-  // Remove student from class
-  async function handleRemoveFromClass(studentId) {
+  // Remove/Unassign student from class
+  async function handleRemoveFromClass(studentId, studentName) {
+    if (!confirm(`Are you sure you want to remove ${studentName || 'this student'} from Class ${cleanName(selectedClass?.name)}?`)) {
+      return;
+    }
+
     setSaving(true);
-    const { error } = await supabase
+
+    // Attempt clearing both class and class_id
+    let { error } = await supabase
       .from('profiles')
-      .update({ class: null, class_id: null })
+      .update({ 
+        class: null, 
+        class_id: null 
+      })
       .eq('id', studentId);
+
+    // Fallback if class_id column does not exist
+    if (error && error.message?.includes('class_id')) {
+      const fallback = await supabase
+        .from('profiles')
+        .update({ class: null })
+        .eq('id', studentId);
+      error = fallback.error;
+    }
 
     if (!error) {
       setMessage({ type: 'success', text: 'Student removed from class.' });
       await fetchInitialData();
+    } else {
+      console.error('Remove Error:', error);
+      setMessage({ type: 'error', text: `Failed to remove student: ${error.message || 'Permission denied'}` });
     }
     setSaving(false);
-    setTimeout(() => setMessage(null), 3500);
+    setTimeout(() => setMessage(null), 4000);
   }
 
   if (loading) {
@@ -307,7 +346,7 @@ export default function AdminClassManagementPage() {
             ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400' 
             : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
         }`}>
-          {message.type === 'error' ? <AlertCircle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+          {message.type === 'error' ? <AlertCircle className="w-4 h-4 flex-shrink-0" /> : <CheckCircle2 className="w-4 h-4 flex-shrink-0" />}
           <span>{message.text}</span>
         </div>
       )}
@@ -569,12 +608,12 @@ export default function AdminClassManagementPage() {
                           </div>
 
                           <button
-                            onClick={() => handleRemoveFromClass(student.id)}
-                            className="p-2 rounded-xl hover:bg-rose-500/10 hover:text-rose-400 text-xs theme-text-secondary transition-colors flex items-center gap-1 font-mono"
+                            onClick={() => handleRemoveFromClass(student.id, fullName)}
+                            className="p-2 rounded-xl hover:bg-rose-500/20 hover:text-rose-400 text-xs theme-text-secondary transition-colors flex items-center gap-1.5 font-mono cursor-pointer border border-transparent hover:border-rose-500/30"
                             title="Remove from class roster"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            <span className="hidden sm:inline text-[10px]">Remove</span>
+                            <span className="text-[11px] font-semibold">Remove</span>
                           </button>
                         </div>
                       );
