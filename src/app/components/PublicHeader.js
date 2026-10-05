@@ -68,14 +68,11 @@ export default function PublicHeader() {
 
       {/* Navigation Links */}
       <nav className="hidden md:flex items-center gap-6 text-xs font-bold theme-text-primary">
-        <Link href="/about-school" className="hover:text-emerald-400 transition-colors">
-          About School
-        </Link>
         <Link href="/teachers-team" className="hover:text-emerald-400 transition-colors">
-          Teachers Team
+          Teachers
         </Link>
         <Link href="/achievements" className="hover:text-emerald-400 transition-colors">
-          Achievements
+          Honors
         </Link>
         <Link href="/clubs" className="hover:text-emerald-400 transition-colors">
           Clubs
@@ -132,7 +129,7 @@ export default function PublicHeader() {
           href="/login"
           className="bg-emerald-500 hover:bg-emerald-400 text-black px-6 py-2.5 rounded-full text-xs font-bold transition-all shadow-md ml-1"
         >
-          Kirish
+          Sign In
         </Link>
       </div>
     </header>

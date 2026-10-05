@@ -5,23 +5,31 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowLeft, Calendar, User, Clock, Share2 } from 'lucide-react';
+import { ArrowLeft, Calendar, User, Clock, Share2, Edit3, Trash2, Loader2 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
 export default function ArticleDetailPage() {
   const params = useParams();
   const router = useRouter();
   const [post, setPost] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    async function fetchPost() {
+    async function fetchData() {
       if (!params?.id) return;
 
       try {
         setLoading(true);
+
+        // Get authenticated user
+        const { data: { user } } = await supabase.auth.getUser();
+        setCurrentUser(user);
+
+        // Fetch post
         const { data, error } = await supabase
           .from('posts')
           .select('*')
@@ -38,7 +46,7 @@ export default function ArticleDetailPage() {
       }
     }
 
-    fetchPost();
+    fetchData();
   }, [params?.id]);
 
   const handleShare = () => {
@@ -49,9 +57,31 @@ export default function ArticleDetailPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!window.confirm('Are you sure you want to delete this article? This action cannot be undone.')) {
+      return;
+    }
+
+    setDeleting(true);
+    const { error } = await supabase
+      .from('posts')
+      .delete()
+      .eq('id', post.id);
+
+    setDeleting(false);
+
+    if (error) {
+      alert(`Failed to delete article: ${error.message}`);
+    } else {
+      router.push('/i-news');
+    }
+  };
+
   const readingTime = post?.content
     ? Math.max(1, Math.ceil(post.content.trim().split(/\s+/).length / 200))
     : 1;
+
+  const isAuthor = currentUser && post && currentUser.id === post.author_id;
 
   if (loading) {
     return (
@@ -67,7 +97,7 @@ export default function ArticleDetailPage() {
         <h1 className="text-2xl font-bold mb-4">{error || 'Article not found'}</h1>
         <Link
           href="/i-news"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors font-medium"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-black rounded-lg transition-colors font-medium"
         >
           <ArrowLeft size={18} />
           Back to News
@@ -79,8 +109,7 @@ export default function ArticleDetailPage() {
   return (
     <div className="min-h-screen theme-bg-page theme-text-primary py-10 px-4 sm:px-6">
       <main className="max-w-4xl mx-auto">
-        {/* Navigation Bar */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
           <Link
             href="/i-news"
             className="inline-flex items-center gap-2 text-sm font-medium opacity-80 hover:opacity-100 hover:text-emerald-500 transition-colors"
@@ -89,16 +118,39 @@ export default function ArticleDetailPage() {
             Back to Articles
           </Link>
 
-          <button
-            onClick={handleShare}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md theme-bg-card theme-border border hover:border-emerald-500 transition-colors"
-          >
-            <Share2 size={14} />
-            {copied ? 'Copied Link!' : 'Share'}
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Author Actions */}
+            {isAuthor && (
+              <>
+                <Link
+                  href={`/editor?id=${post.id}`}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                >
+                  <Edit3 size={14} />
+                  Edit
+                </Link>
+
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  Delete
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={handleShare}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md theme-bg-card theme-border border hover:border-emerald-500 transition-colors cursor-pointer"
+            >
+              <Share2 size={14} />
+              {copied ? 'Copied Link!' : 'Share'}
+            </button>
+          </div>
         </div>
 
-        {/* Article Header */}
         <header className="mb-8 border-b theme-border pb-8">
           <div className="mb-4">
             <span className="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
@@ -111,10 +163,20 @@ export default function ArticleDetailPage() {
           </h1>
 
           <div className="flex flex-wrap items-center gap-4 text-xs sm:text-sm opacity-75">
-            <div className="flex items-center gap-1.5">
-              <User size={16} className="text-emerald-500" />
-              <span>{post.author_name || 'Anonymous'}</span>
-            </div>
+            {post.author_id ? (
+              <Link
+                href={`/profile/${post.author_id}`}
+                className="flex items-center gap-1.5 hover:text-emerald-400 hover:underline transition-colors font-semibold"
+              >
+                <User size={16} className="text-emerald-500" />
+                <span>{post.author_name || 'Anonymous Teacher'}</span>
+              </Link>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <User size={16} className="text-emerald-500" />
+                <span>{post.author_name || 'Anonymous'}</span>
+              </div>
+            )}
             <span>•</span>
             <div className="flex items-center gap-1.5">
               <Calendar size={16} className="text-emerald-500" />
@@ -134,7 +196,16 @@ export default function ArticleDetailPage() {
           </div>
         </header>
 
-        {/* Markdown Rendered Article Body */}
+        {post.image_url && (
+          <div className="mb-8 rounded-2xl overflow-hidden border theme-border bg-black/30 p-2 flex justify-center">
+            <img
+              src={post.image_url}
+              alt={post.title}
+              className="w-full h-auto max-h-[600px] object-contain rounded-xl"
+            />
+          </div>
+        )}
+
         <article className="prose dark:prose-invert max-w-none theme-text-primary">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
@@ -151,6 +222,15 @@ export default function ArticleDetailPage() {
               ),
               p: ({ children }) => (
                 <p className="mb-4 leading-relaxed opacity-90">{children}</p>
+              ),
+              img: ({ src, alt }) => (
+                <span className="block my-6 rounded-2xl overflow-hidden border theme-border bg-black/30 p-2 text-center flex justify-center">
+                  <img
+                    src={src}
+                    alt={alt || 'Article Image'}
+                    className="w-full h-auto max-h-[600px] object-contain rounded-xl inline-block"
+                  />
+                </span>
               ),
               ul: ({ children }) => (
                 <ul className="list-disc list-inside mb-4 space-y-1 pl-2">

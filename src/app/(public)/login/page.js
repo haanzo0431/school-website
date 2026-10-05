@@ -31,16 +31,23 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
 
-    const prefix = rolePrefixes[role];
     let cleanId = loginId.trim();
+    const upperId = cleanId.toUpperCase();
 
-    if (!cleanId.toUpperCase().startsWith(prefix)) {
+    // 1. Auto-detect if user typed an Admin ID (A-...) directly
+    let prefix = rolePrefixes[role];
+    if (upperId.startsWith('A-')) {
+      prefix = 'A-';
+    }
+
+    if (!upperId.startsWith(prefix)) {
       cleanId = `${prefix}${cleanId}`;
     }
 
     const formattedEmail = `${cleanId.toLowerCase()}@xonqa.school`;
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    // 2. Sign in with Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email: formattedEmail,
       password: password,
     });
@@ -51,7 +58,19 @@ export default function LoginPage() {
       return;
     }
 
-    router.push('/platform');
+    // 3. Fetch user's role from profiles table to determine redirect target
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', authData.user.id)
+      .single();
+
+    // 4. Smart Redirect
+    if (profile?.role === 'admin') {
+      router.push('/admin');
+    } else {
+      router.push('/platform');
+    }
   };
 
   return (
@@ -149,9 +168,9 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold py-3 rounded-xl text-xs transition-all shadow-md disabled:opacity-50 uppercase tracking-wider"
+            className="w-full mt-2 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold py-3 rounded-xl text-xs transition-all shadow-md disabled:opacity-50 uppercase tracking-wider cursor-pointer"
           >
-            {loading ? 'Checking...' : `Sign In as  ${ROLE_LABELS[role]}`}
+            {loading ? 'Checking...' : `Sign In as ${ROLE_LABELS[role]}`}
           </button>
         </form>
       </div>

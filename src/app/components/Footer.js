@@ -22,6 +22,12 @@ export default function Footer() {
         >
           Instagram
         </a>
+        <Link
+          href="/login?role=admin"
+          className="theme-text-secondary hover:text-emerald-500 transition-colors opacity-60 hover:opacity-100 text-[11px]"
+        >
+          Admin Portal
+        </Link>
       </div>
     </footer>
   );

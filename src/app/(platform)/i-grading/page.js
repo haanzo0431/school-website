@@ -1,35 +1,128 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   ClipboardCheck, Save, CheckCircle2, 
-  Search, Award, AlertCircle 
+  Search, Award, AlertCircle, Loader2
 } from 'lucide-react';
-
-const INITIAL_STUDENTS = [
-  { id: 1, name: 'Jasur Rahimov', q1: '5', q2: '5', exam: '5', notes: 'Top performer' },
-  { id: 2, name: 'Malika Saidova', q1: '5', q2: '4', exam: '5', notes: 'Active in class' },
-  { id: 3, name: 'Bobur Azimov', q1: '4', q2: '4', exam: '4', notes: 'Good progress' },
-  { id: 4, name: 'Nigora Toshpulatova', q1: '5', q2: '5', exam: '5', notes: 'Excellent logic' },
-  { id: 5, name: 'Sardor Karimov', q1: '3', q2: '3', exam: '4', notes: 'Needs improvement in algebra' },
-];
+import { supabase } from '@/app/supabase';
 
 export default function TeacherGradingHubPage() {
   const [selectedClass, setSelectedClass] = useState('10-A');
   const [selectedSubject, setSelectedSubject] = useState('Mathematics');
-  const [students, setStudents] = useState(INITIAL_STUDENTS);
-  const [savedMessage, setSavedMessage] = useState(false);
+  
+  const [students, setStudents] = useState([]);
+  const [grades, setGrades] = useState({}); // { student_id: { q1, q2, exam, notes } }
+  
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
 
-  const handleGradeChange = (id, field, value) => {
-    setStudents((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, [field]: value } : s))
-    );
+  // Load students and existing grades when class or subject changes
+  useEffect(() => {
+    fetchGradingData();
+  }, [selectedClass, selectedSubject]);
+
+  const fetchGradingData = async () => {
+    setLoading(true);
+    try {
+      // 1. Fetch real student profiles
+      const { data: studentList, error: studentError } = await supabase
+        .from('profiles')
+        .select('id, name, surname, email')
+        .eq('role', 'student');
+
+      if (studentError) throw studentError;
+      setStudents(studentList || []);
+
+      // 2. Fetch existing grade records for this class & subject
+      const { data: gradeRecords, error: gradeError } = await supabase
+        .from('grades')
+        .select('student_id, q1, q2, exam, notes')
+        .eq('class_name', selectedClass)
+        .eq('subject', selectedSubject);
+
+      if (gradeError) throw gradeError;
+
+      // Map grade records into state by student_id
+      const initialGrades = {};
+      gradeRecords?.forEach((record) => {
+        initialGrades[record.student_id] = {
+          q1: record.q1 || '5',
+          q2: record.q2 || '5',
+          exam: record.exam || '5',
+          notes: record.notes || '',
+        };
+      });
+
+      // Set default values for students without existing grade records
+      (studentList || []).forEach((student) => {
+        if (!initialGrades[student.id]) {
+          initialGrades[student.id] = {
+            q1: '5',
+            q2: '5',
+            exam: '5',
+            notes: '',
+          };
+        }
+      });
+
+      setGrades(initialGrades);
+} catch (error) {
+      console.error('Error loading grade data:', error.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSaveGrades = (e) => {
+  const handleGradeChange = (studentId, field, value) => {
+    setGrades((prev) => ({
+      ...prev,
+      [studentId]: {
+        ...prev[studentId],
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleSaveGrades = async (e) => {
     e.preventDefault();
-    setSavedMessage(true);
-    setTimeout(() => setSavedMessage(false), 4000);
+    setSaving(true);
+    setToastMessage(null);
+
+    const payload = students.map((student) => ({
+      student_id: student.id,
+      class_name: selectedClass,
+      subject: selectedSubject,
+      q1: grades[student.id]?.q1 || '5',
+      q2: grades[student.id]?.q2 || '5',
+      exam: grades[student.id]?.exam || '5',
+      notes: grades[student.id]?.notes || '',
+      updated_at: new Date().toISOString(),
+    }));
+
+    try {
+      // Upsert updates existing grade records if (student_id, subject, class_name) matches
+      const { error } = await supabase
+        .from('grades')
+        .upsert(payload, { onConflict: 'student_id, subject, class_name' });
+
+      if (error) throw error;
+
+      setToastMessage({
+        type: 'success',
+        text: `Grades for ${selectedClass} (${selectedSubject}) published successfully!`,
+      });
+    } catch (error) {
+      console.error('Failed to save grades:', error.message);
+      setToastMessage({
+        type: 'error',
+        text: 'Failed to publish grade records.',
+      });
+    } finally {
+      setSaving(false);
+      setTimeout(() => setToastMessage(null), 4000);
+    }
   };
 
   return (
@@ -65,13 +158,27 @@ export default function TeacherGradingHubPage() {
           >
             <option value="Mathematics">Mathematics</option>
             <option value="Geometry">Geometry</option>
+            <option value="Physics">Physics</option>
+            <option value="Computer Science">Computer Science</option>
           </select>
         </div>
       </div>
 
-      {savedMessage && (
-        <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4" /> Grades for {selectedClass} ({selectedSubject}) published successfully!
+      {/* Toast Feedback Message */}
+      {toastMessage && (
+        <div
+          className={`p-4 rounded-2xl border text-xs font-semibold flex items-center gap-2 animate-in fade-in duration-200 ${
+            toastMessage.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+          }`}
+        >
+          {toastMessage.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 shrink-0" />
+          )}
+          <span>{toastMessage.text}</span>
         </div>
       )}
 
@@ -84,59 +191,84 @@ export default function TeacherGradingHubPage() {
           <span className="text-xs theme-text-secondary font-mono">Scale: 1 to 5</span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b theme-border theme-text-secondary text-[11px] font-mono uppercase">
-                <th className="py-3 px-4">Student</th>
-                <th className="py-3 px-4">Q1 Grade</th>
-                <th className="py-3 px-4">Q2 Grade</th>
-                <th className="py-3 px-4">Exam Score</th>
-                <th className="py-3 px-4">Remarks / Notes</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y theme-border">
-              {students.map((st) => (
-                <tr key={st.id} className="hover:bg-emerald-500/5 transition-colors">
-                  <td className="py-3.5 px-4 font-semibold">{st.name}</td>
-                  
-                  {['q1', 'q2', 'exam'].map((field) => (
-                    <td key={field} className="py-3 px-4">
-                      <select
-                        value={st[field]}
-                        onChange={(e) => handleGradeChange(st.id, field, e.target.value)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-mono font-bold theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="5">5 (A)</option>
-                        <option value="4">4 (B)</option>
-                        <option value="3">3 (C)</option>
-                        <option value="2">2 (D)</option>
-                      </select>
-                    </td>
-                  ))}
-
-                  <td className="py-3 px-4">
-                    <input
-                      type="text"
-                      value={st.notes}
-                      onChange={(e) => handleGradeChange(st.id, 'notes', e.target.value)}
-                      placeholder="Add brief note..."
-                      className="w-full px-3 py-1.5 rounded-lg text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
-                    />
-                  </td>
+        {loading ? (
+          <div className="p-12 flex flex-col items-center justify-center text-xs font-mono theme-text-secondary gap-3">
+            <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
+            Fetching student profiles & grades...
+          </div>
+        ) : students.length === 0 ? (
+          <div className="p-12 text-center text-xs font-mono theme-text-secondary">
+            No students found in the database.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b theme-border theme-text-secondary text-[11px] font-mono uppercase">
+                  <th className="py-3 px-4">Student</th>
+                  <th className="py-3 px-4">Q1 Grade</th>
+                  <th className="py-3 px-4">Q2 Grade</th>
+                  <th className="py-3 px-4">Exam Score</th>
+                  <th className="py-3 px-4">Remarks / Notes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y theme-border">
+                {students.map((st) => {
+                  const studentGrade = grades[st.id] || { q1: '5', q2: '5', exam: '5', notes: '' };
+                  const studentName = `${st.name || ''} ${st.surname || ''}`.trim() || st.email;
+
+                  return (
+                    <tr key={st.id} className="hover:bg-emerald-500/5 transition-colors">
+                      <td className="py-3.5 px-4 font-semibold">
+                        <div>{studentName}</div>
+                        <div className="text-[10px] font-mono theme-text-secondary">{st.email}</div>
+                      </td>
+                      
+                      {['q1', 'q2', 'exam'].map((field) => (
+                        <td key={field} className="py-3 px-4">
+                          <select
+                            value={studentGrade[field] || '5'}
+                            onChange={(e) => handleGradeChange(st.id, field, e.target.value)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-mono font-bold theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+                          >
+                            <option value="5">5 (A)</option>
+                            <option value="4">4 (B)</option>
+                            <option value="3">3 (C)</option>
+                            <option value="2">2 (D)</option>
+                            <option value="1">1 (F)</option>
+                          </select>
+                        </td>
+                      ))}
+
+                      <td className="py-3 px-4">
+                        <input
+                          type="text"
+                          value={studentGrade.notes || ''}
+                          onChange={(e) => handleGradeChange(st.id, 'notes', e.target.value)}
+                          placeholder="Add brief note..."
+                          className="w-full px-3 py-1.5 rounded-lg text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="flex justify-end pt-2">
           <button
             type="submit"
-            className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs px-6 py-3 rounded-xl transition-all cursor-pointer shadow-md"
+            disabled={saving || loading || students.length === 0}
+            className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold text-xs px-6 py-3 rounded-xl transition-all cursor-pointer shadow-md"
           >
-            <Save className="w-4 h-4" />
-            <span>Publish Grade Records</span>
+            {saving ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            <span>{saving ? 'Publishing...' : 'Publish Grade Records'}</span>
           </button>
         </div>
       </form>

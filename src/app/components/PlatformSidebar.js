@@ -8,7 +8,8 @@ import {
   Home, Users, 
   LogOut, Calendar, 
   MessageSquare, User, Newspaper, GraduationCap,
-  TrendingUp, ClipboardCheck, PenSquare
+  TrendingUp, ClipboardCheck, PenSquare, UserPlus,
+  UserCheck
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
@@ -16,6 +17,8 @@ export default function PlatformSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [role, setRole] = useState('student');
+
+  const isAdminRoute = pathname.startsWith('/admin');
 
   useEffect(() => {
     async function loadRole() {
@@ -30,9 +33,11 @@ export default function PlatformSidebar() {
         const emailPrefix = user.email ? user.email.split('@')[0].toLowerCase() : '';
         let userRole = data?.role;
 
-        if (emailPrefix.startsWith('t-')) {
+        if (emailPrefix.startsWith('a-') || userRole === 'admin') {
+          userRole = 'admin';
+        } else if (emailPrefix.startsWith('t-') || userRole === 'teacher') {
           userRole = 'teacher';
-        } else if (emailPrefix.startsWith('p-')) {
+        } else if (emailPrefix.startsWith('p-') || userRole === 'parent') {
           userRole = 'parent';
         } else if (!userRole || userRole === 'viewer') {
           userRole = 'student';
@@ -50,12 +55,16 @@ export default function PlatformSidebar() {
   };
 
   const navLinks = {
+    admin: [
+      { label: 'Create Account', href: '/admin', icon: UserPlus },
+    ],
     teacher: [
       { label: 'Dashboard', href: '/platform', icon: Home },
+      { label: 'Daily Attendance', href: '/i-attendance', icon: UserCheck },
+      { label: 'Grading Hub', href: '/i-grading', icon: ClipboardCheck },
+      { label: 'My Classes', href: '/i-classes', icon: Users },
       { label: 'Internal News', href: '/i-news', icon: Newspaper },
       { label: 'School Clubs', href: '/i-clubs', icon: Calendar },
-      { label: 'My Classes', href: '/i-classes', icon: Users },
-      { label: 'Grading Hub', href: '/i-grading', icon: ClipboardCheck },
     ],
     student: [
       { label: 'Overview', href: '/platform', icon: Home },
@@ -73,12 +82,13 @@ export default function PlatformSidebar() {
     ],
   };
 
-  const links = navLinks[role] || navLinks.student;
+  const currentRole = isAdminRoute ? 'admin' : role;
+  const links = navLinks[currentRole] || navLinks.student;
 
   return (
     <aside className="w-64 border-r theme-border theme-bg-card p-6 hidden md:flex flex-col justify-between h-screen sticky top-0 shrink-0">
       <div className="space-y-6">
-        <Link href="/platform" className="flex items-center gap-3.5">
+        <Link href={isAdminRoute ? "/admin" : "/platform"} className="flex items-center gap-3.5">
           <div className="relative w-12 h-12 rounded-full overflow-hidden border border-emerald-500/30 shrink-0 bg-emerald-500/10 flex items-center justify-center p-0.5">
             <Image
               src="/school_logo.png"
@@ -95,7 +105,7 @@ export default function PlatformSidebar() {
           <div>
             <h2 className="font-serif font-bold text-sm theme-text-primary leading-tight">Xonqa Tuman</h2>
             <span className="text-[9px] font-mono text-emerald-400 uppercase tracking-widest block mt-0.5">
-              {role} portal
+              {currentRole} portal
             </span>
           </div>
         </Link>
@@ -123,7 +133,7 @@ export default function PlatformSidebar() {
       </div>
 
       <div>
-        {role === 'teacher' && (
+        {currentRole === 'teacher' && (
           <Link
             href="/editor"
             className="flex items-center justify-center gap-2 w-full py-2.5 px-4 mb-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition-all shadow-md cursor-pointer"
