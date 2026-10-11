@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">School Platform</string>
+    <string name="title_activity_main">School Platform</string>
+    <string name="package_name">com.schoolplatform.app</string>
+    <string name="custom_url_scheme">com.schoolplatform.app</string>
+</resources>

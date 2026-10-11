@@ -1,7 +1,7 @@
 import '@/app/globals.css';
 
 export const metadata = {
-  title: 'Xonqa Tuman Maktab Platform',
+  title: 'School Platform',
   description: 'School community and management platform',
 };
 

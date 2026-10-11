@@ -21,8 +21,6 @@ import {
   Loader2,
   Eye,
   Edit3,
-  Globe,
-  Lock,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
@@ -54,6 +52,8 @@ const CATEGORY_OPTIONS = [
   'ACHIEVEMENTS',
 ];
 
+const ALLOWED_ROLES = ['teacher', 'admin', 'staff', 'editor'];
+
 function EditorForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -66,7 +66,6 @@ function EditorForm() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [category, setCategory] = useState('GENERAL');
-  const [isPublic, setIsPublic] = useState(false);
   const [coverImageUrl, setCoverImageUrl] = useState('');
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingInline, setUploadingInline] = useState(false);
@@ -77,7 +76,7 @@ function EditorForm() {
   const [wordCount, setWordCount] = useState(0);
   const [isPreview, setIsPreview] = useState(false);
 
-  // Auth & Teacher Role Check + Load existing draft or post
+  // Auth & Role Check + Load existing draft or post
   useEffect(() => {
     async function initEditor() {
       try {
@@ -91,7 +90,7 @@ function EditorForm() {
           return;
         }
 
-        // 2. Check role directly from profiles table
+        // 2. Check role from profiles table
         const { data: profile, error: profileError } = await supabase
           .from('profiles')
           .select('role')
@@ -105,8 +104,9 @@ function EditorForm() {
           return;
         }
 
-        // 3. Strict Teacher Check
-        if (profile.role !== 'teacher') {
+        // 3. Role authorization check (Teacher / Admin / Staff / Editor)
+        const userRole = profile.role ? profile.role.toLowerCase() : '';
+        if (!ALLOWED_ROLES.includes(userRole)) {
           alert(`Access restricted. Your account role (${profile.role}) cannot write articles.`);
           router.push('/i-news');
           return;
@@ -116,15 +116,14 @@ function EditorForm() {
 
         // 4. Load draft or existing post for editing
         if (!editId) {
-          const savedDraft = localStorage.getItem('xonqa_editor_draft');
+          const savedDraft = localStorage.getItem('durbin_editor_draft');
           if (savedDraft) {
             try {
-              const { title: t, content: c, category: cat, coverImageUrl: img, isPublic: pub } = JSON.parse(savedDraft);
+              const { title: t, content: c, category: cat, coverImageUrl: img } = JSON.parse(savedDraft);
               if (t) setTitle(t);
               if (c) setContent(c);
               if (cat) setCategory(cat);
               if (img) setCoverImageUrl(img);
-              if (pub !== undefined) setIsPublic(pub);
             } catch (err) {
               console.error('Failed to parse draft from localStorage', err);
             }
@@ -148,7 +147,6 @@ function EditorForm() {
         setTitle(data.title || '');
         setContent(data.content || '');
         setCategory(data.category || 'GENERAL');
-        setIsPublic(!!data.is_public);
         setCoverImageUrl(data.image_url || '');
         setLoadingEdit(false);
       } catch (err) {
@@ -166,10 +164,10 @@ function EditorForm() {
 
   useEffect(() => {
     if (!editId && !checkingAuth) {
-      const draft = { title, content, category, coverImageUrl, isPublic };
-      localStorage.setItem('xonqa_editor_draft', JSON.stringify(draft));
+      const draft = { title, content, category, coverImageUrl };
+      localStorage.setItem('durbin_editor_draft', JSON.stringify(draft));
     }
-  }, [title, content, category, coverImageUrl, isPublic, editId, checkingAuth]);
+  }, [title, content, category, coverImageUrl, editId, checkingAuth]);
 
   const uploadImageToSupabase = async (file) => {
     if (!file) return null;
@@ -344,15 +342,15 @@ function EditorForm() {
       return;
     }
 
-    // Double check profile role before publishing
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
       .eq('id', user.id)
       .single();
 
-    if (profile?.role !== 'teacher') {
-      alert('Only teachers are authorized to publish articles.');
+    const userRole = profile?.role ? profile.role.toLowerCase() : '';
+    if (!ALLOWED_ROLES.includes(userRole)) {
+      alert('You are not authorized to publish articles.');
       setPublishing(false);
       return;
     }
@@ -362,7 +360,6 @@ function EditorForm() {
       content: content.trim(),
       category: category,
       image_url: coverImageUrl || null,
-      is_public: isPublic,
     };
 
     let error = null;
@@ -374,7 +371,7 @@ function EditorForm() {
         .eq('id', editId);
       error = response.error;
     } else {
-      const authorName = user.email ? user.email.split('@')[0] : 'Teacher';
+      const authorName = user.email ? user.email.split('@')[0] : 'Author';
       const response = await supabase.from('posts').insert([
         {
           ...payload,
@@ -392,7 +389,7 @@ function EditorForm() {
       console.error('Publish error details:', error.message || error);
       alert(`Failed to save post: ${error.message || 'Database error'}`);
     } else {
-      if (!editId) localStorage.removeItem('xonqa_editor_draft');
+      if (!editId) localStorage.removeItem('durbin_editor_draft');
       router.push(editId ? `/i-news/${editId}` : '/i-news');
     }
   };
@@ -469,43 +466,19 @@ function EditorForm() {
           </div>
         </div>
 
-        {/* Category & Public Toggle controls */}
+        {/* Category selection */}
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="px-3.5 py-2 rounded-xl text-xs font-mono font-bold bg-[#111111] theme-text-primary border theme-border focus:outline-none focus:border-emerald-500 transition-colors uppercase tracking-wider cursor-pointer shadow-sm"
-            >
-              {CATEGORY_OPTIONS.map((cat) => (
-                <option key={cat} value={cat} className="bg-[#18181b] text-white py-1">
-                  {cat}
-                </option>
-              ))}
-            </select>
-
-            <button
-              type="button"
-              onClick={() => setIsPublic(!isPublic)}
-              className={`inline-flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-xl border transition-all cursor-pointer ${
-                isPublic
-                  ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400'
-                  : 'theme-bg-card border-theme-border theme-text-secondary hover:theme-text-primary'
-              }`}
-            >
-              {isPublic ? (
-                <>
-                  <Globe className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Publish to Website</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Platform Only</span>
-                </>
-              )}
-            </button>
-          </div>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="px-3.5 py-2 rounded-xl text-xs font-mono font-bold bg-[#111111] theme-text-primary border theme-border focus:outline-none focus:border-emerald-500 transition-colors uppercase tracking-wider cursor-pointer shadow-sm"
+          >
+            {CATEGORY_OPTIONS.map((cat) => (
+              <option key={cat} value={cat} className="bg-[#18181b] text-white py-1">
+                {cat}
+              </option>
+            ))}
+          </select>
 
           <input
             type="file"

@@ -2,23 +2,20 @@
 
 import { useState, useEffect } from 'react';
 import { 
-  Users, Plus, Search, CheckCircle2, Clock, 
-  XCircle, Send, Loader2, Sparkles, Building2, 
-  BookOpen, Filter, FileText, Check, X, User
+  Users, Plus, Search, CheckCircle2, 
+  XCircle, Send, Loader2, FileText, Check, X, User
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
 export default function ClubsPage() {
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
-  const [activeRole, setActiveRole] = useState('student'); // Controls which sub-view (for teachers)
+  const [activeRole, setActiveRole] = useState('student'); // Controls sub-view for teachers/admins
   
   const [clubs, setClubs] = useState([]);
   const [applications, setApplications] = useState([]);
-  const [teachers, setTeachers] = useState([]);
-  const [students, setStudents] = useState([]);
   
-  // Selection states (for testing/selecting as parent/admin)
+  // Selection states
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -34,7 +31,7 @@ export default function ClubsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // Form states for creating a club
+  // Form state for creating a club
   const [newClub, setNewClub] = useState({
     title: '',
     category: 'STEM & Tech',
@@ -43,7 +40,7 @@ export default function ClubsPage() {
     room: 'Lab 101',
   });
 
-  // Effect to load user profile and set initial view role
+  // Load user profile and set initial view role
   useEffect(() => {
     async function loadUserProfile() {
       setProfileLoading(true);
@@ -58,7 +55,6 @@ export default function ClubsPage() {
 
         if (profile) {
           setUserProfile(profile);
-          // Auto-set the active role based on real user role
           if (profile.role === 'teacher' || profile.role === 'admin') {
             setActiveRole('teacher');
             setSelectedTeacherId(profile.id);
@@ -71,38 +67,18 @@ export default function ClubsPage() {
       setProfileLoading(false);
     }
     loadUserProfile();
-    loadInitialData(); // Load standard lists
   }, []);
 
-  // Effect to refetch clubs/apps when view, user, or profiles change
+  // Refetch clubs/apps when view or profile changes
   useEffect(() => {
     if (!profileLoading) {
       fetchClubsAndApps();
     }
   }, [profileLoading, activeRole, userProfile]);
 
-  const loadInitialData = async () => {
-    try {
-      const { data: profileList } = await supabase
-        .from('profiles')
-        .select('id, name, surname, email, role');
-
-      if (profileList) {
-        const studentList = profileList.filter((p) => p.role === 'student');
-        const teacherList = profileList.filter((p) => p.role === 'teacher' || p.role === 'admin');
-
-        setStudents(studentList);
-        setTeachers(teacherList);
-      }
-    } catch (err) {
-      console.error('Error loading profiles:', err.message);
-    }
-  };
-
-const fetchClubsAndApps = async () => {
+  const fetchClubsAndApps = async () => {
     setLoading(true);
     try {
-      // 1. Fetch raw clubs table
       const { data: clubsData, error: clubsErr } = await supabase
         .from('clubs')
         .select('*')
@@ -110,7 +86,6 @@ const fetchClubsAndApps = async () => {
 
       if (clubsErr) throw clubsErr;
 
-      // 2. Fetch raw applications table
       const { data: appsData, error: appsErr } = await supabase
         .from('club_applications')
         .select('*')
@@ -118,16 +93,13 @@ const fetchClubsAndApps = async () => {
 
       if (appsErr) throw appsErr;
 
-      // 3. Fetch raw profiles table
       const { data: profilesData } = await supabase
         .from('profiles')
         .select('id, name, surname, email');
 
-      // Create lookup maps for client-side joining
       const profilesMap = new Map((profilesData || []).map((p) => [p.id, p]));
       const clubsMap = new Map((clubsData || []).map((c) => [c.id, c]));
 
-      // 4. Attach profile and club details manually
       const enrichedClubs = (clubsData || []).map((club) => ({
         ...club,
         profiles: profilesMap.get(club.advisor_id) || null,
@@ -239,7 +211,6 @@ const fetchClubsAndApps = async () => {
     setTimeout(() => setToast(null), 4000);
   };
 
-  // Filters
   const filteredClubs = clubs.filter((c) => {
     const matchesCategory = selectedCategory === 'All' || c.category === selectedCategory;
     const matchesSearch = c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -250,7 +221,6 @@ const fetchClubsAndApps = async () => {
   const isTeacherOrAdmin = userProfile?.role === 'teacher' || userProfile?.role === 'admin';
   const studentApplications = applications.filter((a) => a.student_id === selectedStudentId);
 
-  // Render a loading state while fetching user profile
   if (profileLoading) {
     return (
       <div className="p-16 flex flex-col items-center justify-center h-screen theme-text-secondary gap-3">
@@ -282,13 +252,12 @@ const fetchClubsAndApps = async () => {
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono mb-2">
             <Users className="w-3.5 h-3.5" /> Extracurricular Activities
           </div>
-          <h1 className="text-3xl font-serif font-bold">School Clubs & Societies</h1>
+          <h1 className="text-3xl font-serif font-bold">Clubs & Societies</h1>
           <p className="text-xs theme-text-secondary mt-1">
             Join student-led clubs, build projects, or launch a new club as an advisor.
           </p>
         </div>
 
-        {/* Dynamic Controls - ONLY shown to Teachers/Admins */}
         {isTeacherOrAdmin && (
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex bg-neutral-900 border theme-border p-1 rounded-xl text-xs font-mono">
@@ -321,7 +290,7 @@ const fetchClubsAndApps = async () => {
         )}
       </div>
 
-      {/* TEACHER ADMIN: APPLICATION REVIEW PANEL - Exclusive to teachers in teacher view */}
+      {/* Teacher Review Panel */}
       {isTeacherOrAdmin && activeRole === 'teacher' && (
         <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-6 animate-in fade-in">
           <div className="flex items-center justify-between">
@@ -329,7 +298,7 @@ const fetchClubsAndApps = async () => {
               <FileText className="w-4 h-4 text-emerald-400" />
               Club Join Requests ({applications.length})
             </h2>
-            <span className="text-xs font-mono theme-text-secondary">Google Forms Style Submissions</span>
+            <span className="text-xs font-mono theme-text-secondary">Submissions</span>
           </div>
 
           {applications.length === 0 ? (
@@ -338,13 +307,12 @@ const fetchClubsAndApps = async () => {
             </p>
           ) : (
             <div className="overflow-x-auto">
-              {/* ... The application review table from the previous turn ... */}
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b theme-border theme-text-secondary font-mono uppercase text-[10px]">
                     <th className="py-3 px-4">Student</th>
                     <th className="py-3 px-4">Applied Club</th>
-                    <th className="py-3 px-4">Motivation / Form Answer</th>
+                    <th className="py-3 px-4">Motivation / Answer</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Action</th>
                   </tr>
@@ -406,7 +374,7 @@ const fetchClubsAndApps = async () => {
         </div>
       )}
 
-      {/* STUDENT: APPLICATION TRACKER - Shown in student view */}
+      {/* Student Application Tracker */}
       {activeRole === 'student' && studentApplications.length > 0 && (
         <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4 animate-in fade-in">
           <h2 className="text-sm font-serif font-bold text-emerald-400 flex items-center gap-2">
@@ -431,8 +399,7 @@ const fetchClubsAndApps = async () => {
         </div>
       )}
 
-      {/* Main Content Area (Filters, Clubs Grid) shown to everyone */}
-      {/* ... (The rest of the code is identical to previous, but only allows view changes for teachers) ... */}
+      {/* Filters & Search */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex flex-wrap gap-2 text-xs font-semibold">
           {['All', 'STEM & Tech', 'Arts & Media', 'Academics', 'Sports'].map((cat) => (
@@ -509,7 +476,6 @@ const fetchClubsAndApps = async () => {
                     <p>Schedule: <span className="text-white">{club.schedule}</span></p>
                   </div>
 
-                  {/* Student Apply Button - Shown in Student View, hidden for current teachers */}
                   {activeRole === 'student' && userProfile?.id !== club.advisor_id && (
                     <button
                       onClick={() => setApplyingClub(club)}
@@ -536,18 +502,18 @@ const fetchClubsAndApps = async () => {
         </div>
       )}
 
-      {/* CREATE CLUB MODAL (TEACHER-ONLY) */}
+      {/* Create Club Modal */}
       {isTeacherOrAdmin && showCreateModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="p-6 theme-bg-card border theme-border rounded-3xl max-w-lg w-full space-y-6 animate-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b theme-border pb-4">
               <h2 className="text-lg font-serif font-bold flex items-center gap-2">
                 <Plus className="w-5 h-5 text-emerald-400" />
-                Create New School Club
+                Create New Club
               </h2>
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="text-neutral-400 hover:text-white"
+                className="text-neutral-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -622,14 +588,14 @@ const fetchClubsAndApps = async () => {
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2.5 rounded-xl theme-text-secondary hover:text-white"
+                  className="px-4 py-2.5 rounded-xl theme-text-secondary hover:text-white cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-6 py-2.5 rounded-xl flex items-center gap-2"
+                  className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-6 py-2.5 rounded-xl flex items-center gap-2 cursor-pointer"
                 >
                   {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
                   <span>Publish Club</span>
@@ -640,7 +606,7 @@ const fetchClubsAndApps = async () => {
         </div>
       )}
 
-      {/* APPLY TO CLUB MODAL (GOOGLE FORMS STYLE FOR STUDENTS) */}
+      {/* Apply to Club Modal */}
       {applyingClub && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="p-6 theme-bg-card border theme-border rounded-3xl max-w-lg w-full space-y-6 animate-in zoom-in-95 duration-150">
@@ -653,7 +619,7 @@ const fetchClubsAndApps = async () => {
               </div>
               <button
                 onClick={() => setApplyingClub(null)}
-                className="text-neutral-400 hover:text-white"
+                className="text-neutral-400 hover:text-white cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -676,16 +642,16 @@ const fetchClubsAndApps = async () => {
 
               <div className="flex justify-end gap-3 pt-4 border-t theme-border">
                 <button
-               type="button"
+                  type="button"
                   onClick={() => setApplyingClub(null)}
-                  className="px-4 py-2.5 rounded-xl theme-text-secondary hover:text-white"
+                  className="px-4 py-2.5 rounded-xl theme-text-secondary hover:text-white cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-6 py-2.5 rounded-xl flex items-center gap-2"
+                  className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold px-6 py-2.5 rounded-xl flex items-center gap-2 cursor-pointer"
                 >
                   {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
                   <span>Submit Application</span>

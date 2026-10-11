@@ -15,8 +15,6 @@ import {
   Award,
   Sparkles,
   Layers,
-  Globe,
-  Lock,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
@@ -28,7 +26,7 @@ const CATEGORIES = [
   { id: 'POEMS', label: 'Poems & Creative', icon: Sparkles },
   { id: 'ARTICLES', label: 'Articles', icon: FileText },
   { id: 'SPORTS', label: 'Sports', icon: Trophy },
-  { id: 'CLUBS', label: 'School Clubs', icon: Users },
+  { id: 'CLUBS', label: 'Clubs', icon: Users },
   { id: 'ACHIEVEMENTS', label: 'Achievements', icon: Award },
 ];
 
@@ -80,10 +78,10 @@ export default function NewsPage() {
       <div className="border-b theme-border pb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-serif font-bold flex items-center gap-3">
-            <Newspaper className="w-8 h-8 text-emerald-500" /> School News & Press
+            <Newspaper className="w-8 h-8 text-emerald-500" /> Platform News & Announcements
           </h1>
           <p className="text-xs theme-text-secondary mt-1">
-            Stay updated with official announcements, achievements, and student stories.
+            Stay updated with official announcements, achievements, and community stories.
           </p>
         </div>
       </div>
@@ -120,17 +118,6 @@ export default function NewsPage() {
                         <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold uppercase tracking-wide">
                           {post.category || 'General'}
                         </span>
-
-                        {/* Visibility Badge */}
-                        {post.is_public ? (
-                          <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold uppercase tracking-wide flex items-center gap-1 text-[10px]">
-                            <Globe className="w-3 h-3" /> Website
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 font-bold uppercase tracking-wide flex items-center gap-1 text-[10px]">
-                            <Lock className="w-3 h-3" /> Internal
-                          </span>
-                        )}
 
                         <span>•</span>
                         <span className="flex items-center gap-1">
