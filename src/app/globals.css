@@ -70,3 +70,19 @@ body {
 .animate-marquee:hover {
   animation-play-state: paused;
 }
+.app-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+.left-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 260px;
+  flex-shrink: 0;
+}
+.profile-menu-container {
+  margin-top: auto;
+}
