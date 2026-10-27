@@ -1,306 +1,300 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  Users, Clock, MapPin, Search, Loader2, 
-  CheckCircle2, XCircle, AlertCircle, UserX, FolderOpen
+import {
+  Users, Clock, MapPin, Search, Loader2, UserX, Save,
+  CheckCircle2, AlertCircle, CalendarDays,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
+const CLASS_OPTIONS = ['10-A'];
+const DAY_NAMES = {
+  1: 'Dushanba', 2: 'Seshanba', 3: 'Chorshanba',
+  4: 'Payshanba', 5: 'Juma', 6: 'Shanba',
+};
+const today = () => new Date().toISOString().slice(0, 10);
+
 export default function TeacherClassesPage() {
-  const [classes, setClasses] = useState([]);
-  const [selectedClass, setSelectedClass] = useState(null);
-  const [roster, setRoster] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedClass, setSelectedClass] = useState(CLASS_OPTIONS[0]);
+  const [lessonDate, setLessonDate] = useState(today());
+  const [teacherId, setTeacherId] = useState(null);
+  const [subject, setSubject] = useState('');
+  const [schedule, setSchedule] = useState([]);
+  const [students, setStudents] = useState([]);
+  const [points, setPoints] = useState({});
+  const [classwork, setClasswork] = useState({});
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [rosterLoading, setRosterLoading] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState(null);
 
-  // 1. Fetch real teacher classes from Supabase
   useEffect(() => {
-    async function fetchTeacherClasses() {
-      setLoading(true);
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        setCurrentUser(user);
+    async function loadTeacher() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      setTeacherId(user.id);
 
-        if (!user) {
-          setClasses([]);
-          setLoading(false);
-          return;
-        }
+      const { data: me } = await supabase
+        .from('profiles').select('subject').eq('id', user.id).maybeSingle();
+      setSubject(me?.subject || '');
 
-        // Fetch classes assigned to this teacher, or all real classes in DB
-        let { data: teacherClasses, error } = await supabase
-          .from('classes')
-          .select('*')
-          .eq('teacher_id', user.id);
-
-        if (error || !teacherClasses || teacherClasses.length === 0) {
-          // If no specific teacher_id match, fetch all real classes from DB
-          const { data: allClasses } = await supabase
-            .from('classes')
-            .select('*');
-          teacherClasses = allClasses || [];
-        }
-
-        setClasses(teacherClasses);
-        if (teacherClasses.length > 0) {
-          setSelectedClass(teacherClasses[0]);
-        }
-      } catch (err) {
-        console.error('Error fetching classes from Supabase:', err.message);
-        setClasses([]);
-      } finally {
-        setLoading(false);
-      }
+      const { data: sched } = await supabase
+        .from('schedule').select('*')
+        .eq('teacher_id', user.id)
+        .order('weekday').order('lesson_no');
+      setSchedule(sched || []);
     }
-
-    fetchTeacherClasses();
+    loadTeacher();
   }, []);
 
-  // 2. Fetch real student roster for selected class from Supabase
   useEffect(() => {
-    if (!selectedClass) {
-      setRoster([]);
-      return;
+    async function loadStudents() {
+      setLoading(true);
+      const { data } = await supabase
+        .from('profiles').select('*')
+        .eq('role', 'student')
+        .or(`class.eq.${selectedClass},class_name.eq.${selectedClass}`);
+
+      const list = (data || [])
+        .map((s) => ({
+          id: s.id,
+          name: `${s.surname || ''} ${s.first_name || s.name || ''}`.trim() || s.email,
+          email: s.email,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setStudents(list);
+      setLoading(false);
     }
-
-    async function fetchClassRoster() {
-      setRosterLoading(true);
-      try {
-        // Query real registered profiles with role 'student' matching class_name
-        const { data: studentProfiles, error: studentErr } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('role', 'student')
-          .eq('class_name', selectedClass.name);
-
-        if (studentErr) throw studentErr;
-
-        // Query real grades for this subject
-        const { data: gradesData } = await supabase
-          .from('grades')
-          .select('*')
-          .eq('subject_name', selectedClass.subject_name);
-
-        if (studentProfiles && studentProfiles.length > 0) {
-          const enrichedRoster = studentProfiles.map((student) => {
-            const studentGrade = gradesData?.find((g) => g.student_id === student.id);
-            
-            let avgGrade = 'N/A';
-            if (studentGrade) {
-              const scores = [studentGrade.q1, studentGrade.q2, studentGrade.exam].filter(
-                (val) => typeof val === 'number'
-              );
-              if (scores.length > 0) {
-                avgGrade = (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
-              }
-            }
-
-            const fullName = `${student.name || ''} ${student.surname || ''}`.trim();
-
-            return {
-              id: student.id,
-              name: fullName.length > 0 ? fullName : (student.email || 'Registered Student'),
-              email: student.email,
-              attendanceRate: student.attendance_rate || '100%',
-              currentGrade: avgGrade,
-              status: student.today_status || 'Present',
-            };
-          });
-
-          setRoster(enrichedRoster);
-        } else {
-          setRoster([]);
-        }
-      } catch (err) {
-        console.error('Error fetching roster from Supabase:', err.message);
-        setRoster([]);
-      } finally {
-        setRosterLoading(false);
-      }
-    }
-
-    fetchClassRoster();
+    loadStudents();
   }, [selectedClass]);
 
-  const filteredRoster = roster.filter((student) =>
-    student.name.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    if (!teacherId || students.length === 0) return;
+    async function loadScores() {
+      const { data: fs } = await supabase
+        .from('formative_scores').select('student_id, teacher_points')
+        .eq('teacher_id', teacherId).eq('lesson_date', lessonDate);
+
+      const { data: fv } = await supabase
+        .from('formative_view').select('student_id, classwork_points')
+        .eq('teacher_id', teacherId).eq('lesson_date', lessonDate);
+
+      const p = {};
+      const c = {};
+      students.forEach((s) => {
+        p[s.id] = 4;
+        c[s.id] = 0;
+      });
+      (fs || []).forEach((r) => { p[r.student_id] = r.teacher_points; });
+      (fv || []).forEach((r) => { c[r.student_id] = Number(r.classwork_points); });
+      setPoints(p);
+      setClasswork(c);
+    }
+    loadScores();
+  }, [teacherId, students, lessonDate]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setToast(null);
+    const rows = students.map((s) => ({
+      student_id: s.id,
+      teacher_id: teacherId,
+      subject: subject || '-',
+      lesson_date: lessonDate,
+      teacher_points: Number(points[s.id] ?? 4),
+    }));
+    const { error } = await supabase
+      .from('formative_scores')
+      .upsert(rows, { onConflict: 'student_id,teacher_id,lesson_date' });
+
+    setToast(
+      error
+        ? { type: 'error', text: `Saqlanmadi: ${error.message}` }
+        : { type: 'success', text: `${selectedClass} (${lessonDate}) ballari saqlandi.` }
+    );
+    setSaving(false);
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  const filtered = students.filter((s) =>
+    s.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const classAvg = roster.length > 0
-    ? (roster.reduce((acc, s) => acc + (s.currentGrade !== 'N/A' ? parseFloat(s.currentGrade) : 0), 0) / roster.length).toFixed(1)
-    : 'N/A';
-
-  if (loading) {
-    return (
-      <div className="p-16 flex flex-col items-center justify-center text-xs font-mono theme-text-secondary gap-3">
-        <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
-        Connecting to Supabase database...
-      </div>
-    );
-  }
+  const byDay = {};
+  schedule.forEach((s) => {
+    (byDay[s.weekday] = byDay[s.weekday] || []).push(s);
+  });
 
   return (
-    <div className="p-6 md:p-10 max-w-7xl mx-auto space-y-8">
-      {/* Top Header */}
-      <div>
-        <span className="inline-block px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-semibold rounded-full mb-2 border border-emerald-500/20 font-mono">
-          FACULTY CONSOLE
-        </span>
-        <h1 className="text-3xl font-serif font-bold text-white tracking-tight">My Assigned Classes</h1>
-        <p className="text-xs theme-text-secondary mt-1">
-          Connected to Supabase live environment.
-        </p>
-      </div>
-
-      {/* No Classes in Database Empty State */}
-      {classes.length === 0 ? (
-        <div className="p-12 theme-bg-card border theme-border rounded-3xl text-center space-y-3">
-          <FolderOpen className="w-10 h-10 text-emerald-400 mx-auto opacity-60" />
-          <h3 className="text-base font-bold text-white">No Real Classes Found in Supabase</h3>
-          <p className="text-xs theme-text-secondary max-w-md mx-auto">
-            There are no class records in the <code className="text-emerald-400 font-mono">classes</code> table assigned to your user account (<span className="text-white">{currentUser?.email || 'Logged User'}</span>).
+    <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
+        <div>
+          <span className="inline-block px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-semibold rounded-full mb-2 border border-emerald-500/20 font-mono">
+            FACULTY CONSOLE
+          </span>
+          <h1 className="text-3xl font-serif font-bold tracking-tight">My Classes</h1>
+          <p className="text-xs theme-text-secondary mt-1">
+            Fan: <span className="font-semibold">{subject || '-'}</span>
           </p>
         </div>
-      ) : (
-        <>
-          {/* Real Class Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {classes.map((cls) => {
-              const isSelected = selectedClass?.id === cls.id;
-              return (
-                <div
-                  key={cls.id}
-                  onClick={() => setSelectedClass(cls)}
-                  className={`cursor-pointer p-6 rounded-3xl border transition-all duration-200 relative overflow-hidden ${
-                    isSelected
-                      ? 'bg-emerald-500/10 border-emerald-500/50 shadow-lg shadow-emerald-500/5'
-                      : 'theme-bg-card border-gray-800 hover:border-gray-700'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold ${
-                      isSelected ? 'bg-emerald-500 text-black' : 'bg-gray-800 text-emerald-400'
-                    }`}>
-                      {cls.name}
+        <div className="flex items-center gap-3">
+          <select
+            value={selectedClass}
+            onChange={(e) => setSelectedClass(e.target.value)}
+            className="px-4 py-2.5 rounded-xl text-xs font-semibold theme-bg-card border theme-border focus:outline-none focus:border-emerald-500 cursor-pointer"
+          >
+            {CLASS_OPTIONS.map((c) => (
+              <option key={c} value={c}>Class {c}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4">
+        <h2 className="text-base font-serif font-bold flex items-center gap-2">
+          <CalendarDays className="w-4 h-4 text-emerald-400" /> Haftalik dars jadvali ({selectedClass})
+        </h2>
+        {schedule.length === 0 ? (
+          <p className="text-xs theme-text-secondary font-mono">Jadval kiritilmagan.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {Object.keys(byDay).map((d) => (
+              <div key={d} className="p-4 rounded-2xl theme-bg-page border theme-border space-y-2">
+                <div className="text-xs font-bold text-emerald-400">{DAY_NAMES[d]}</div>
+                {byDay[d].map((l) => (
+                  <div key={l.id} className="text-xs font-mono theme-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                      {l.lesson_no}-dars
                     </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {String(l.start_time).slice(0, 5)}-{String(l.end_time).slice(0, 5)}
+                    </span>
+                    {l.room && (
+                      <span className="flex items-center gap-1">
+                        <MapPin className="w-3 h-3" /> {l.room}
+                      </span>
+                    )}
                   </div>
-
-                  <h3 className="text-base font-bold text-white mb-4">{cls.subject_name}</h3>
-
-                  <div className="space-y-1.5 text-xs theme-text-secondary font-mono">
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>{cls.schedule || 'Schedule Not Set'}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>{cls.room || 'Room Not Set'}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Roster Section for Selected Class */}
-          {selectedClass && (
-            <div className="p-6 md:p-8 theme-bg-card border theme-border rounded-3xl space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
-                <div>
-                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Users className="w-5 h-5 text-emerald-400" />
-                    {selectedClass.name} Student Roster
-                  </h2>
-                  <p className="text-xs font-mono theme-text-secondary mt-1">
-                    Subject: <span className="text-white">{selectedClass.subject_name}</span> | Class Avg: <span className="text-emerald-400 font-bold">{classAvg}</span>
-                  </p>
-                </div>
-
-                <div className="relative min-w-[260px]">
-                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500" />
-                  <input
-                    type="text"
-                    placeholder="Search real students..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-gray-900/80 border border-gray-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-emerald-500 transition-colors"
-                  />
-                </div>
+                ))}
               </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-              {rosterLoading ? (
-                <div className="py-12 text-center text-xs font-mono theme-text-secondary flex items-center justify-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-emerald-400" />
-                  Fetching accounts from Supabase profiles...
-                </div>
-              ) : roster.length === 0 ? (
-                <div className="py-12 text-center space-y-2">
-                  <UserX className="w-8 h-8 text-gray-600 mx-auto" />
-                  <p className="text-xs font-mono text-gray-400">
-                    No real student accounts found in Supabase for <span className="text-emerald-400">{selectedClass.name}</span>.
-                  </p>
-                  <p className="text-[11px] theme-text-secondary">
-                    Ensure user rows in <code className="text-white font-mono">profiles</code> table have <code className="text-white font-mono">role = 'student'</code> and <code className="text-white font-mono">class_name = '{selectedClass.name}'</code>.
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b theme-border theme-text-secondary font-mono uppercase text-[10px]">
-                        <th className="py-3 px-4">Real Student Name</th>
-                        <th className="py-3 px-4">Attendance Rate</th>
-                        <th className="py-3 px-4">Current Grade</th>
-                        <th className="py-3 px-4">Today's Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y theme-border">
-                      {filteredRoster.map((student) => (
-                        <tr key={student.id} className="hover:bg-emerald-500/5 transition-colors">
-                          <td className="py-4 px-4 font-medium text-white flex items-center gap-3">
-                            <div className="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs font-mono">
-                              {student.name[0]?.toUpperCase()}
-                            </div>
-                            <div>
-                              <div>{student.name}</div>
-                              <div className="text-[10px] theme-text-secondary font-mono">{student.email}</div>
-                            </div>
-                          </td>
-                          <td className="py-4 px-4 font-mono theme-text-secondary">
-                            {student.attendanceRate}
-                          </td>
-                          <td className="py-4 px-4 font-mono font-bold">
-                            <span className="px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                              {student.currentGrade}
-                            </span>
-                          </td>
-                          <td className="py-4 px-4">
-                            <span className={`px-3 py-1 rounded-full text-[10px] font-mono inline-flex items-center gap-1 ${
-                              student.status === 'Present'
-                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                            }`}>
-                              {student.status === 'Present' ? (
-                                <CheckCircle2 className="w-3 h-3" />
-                              ) : (
-                                <XCircle className="w-3 h-3" />
-                              )}
-                              {student.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </>
+      {toast && (
+        <div
+          className={`p-4 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
+            toast.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+          }`}
+        >
+          {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+          <span>{toast.text}</span>
+        </div>
       )}
+
+      <div className="p-6 md:p-8 theme-bg-card border theme-border rounded-3xl space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
+          <div>
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <Users className="w-5 h-5 text-emerald-400" />
+              {selectedClass} o'quvchilari ({students.length})
+            </h2>
+            <p className="text-xs font-mono theme-text-secondary mt-1">
+              Siz 10 balldan 4 tasini qo'yasiz. Qolgan 6 ball classwork'dan keladi.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="date"
+              value={lessonDate}
+              onChange={(e) => setLessonDate(e.target.value)}
+              className="px-3 py-2 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+            />
+            <div className="relative">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+              <input
+                type="text"
+                placeholder="Qidirish..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9 pr-4 py-2 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="py-12 flex items-center justify-center gap-2 text-xs font-mono theme-text-secondary">
+            <Loader2 className="w-4 h-4 animate-spin text-emerald-400" /> Yuklanmoqda...
+          </div>
+        ) : students.length === 0 ? (
+          <div className="py-12 text-center space-y-2">
+            <UserX className="w-8 h-8 text-gray-600 mx-auto" />
+            <p className="text-xs font-mono theme-text-secondary">{selectedClass} da o'quvchi topilmadi.</p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b theme-border theme-text-secondary font-mono uppercase text-[10px]">
+                    <th className="py-3 px-4">O'quvchi</th>
+                    <th className="py-3 px-4">Ustoz balli (10 dan)</th>
+                    <th className="py-3 px-4">Classwork (6 dan)</th>
+                    <th className="py-3 px-4">Jami (10 dan)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y theme-border">
+                  {filtered.map((s) => {
+                    const t = Number(points[s.id] ?? 4);
+                    const c = Number(classwork[s.id] ?? 0);
+                    return (
+                      <tr key={s.id} className="hover:bg-emerald-500/5 transition-colors">
+                        <td className="py-3.5 px-4">
+                          <div className="font-semibold">{s.name}</div>
+                          <div className="text-[10px] font-mono theme-text-secondary">{s.email}</div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <select
+                            value={t}
+                            onChange={(e) => setPoints((p) => ({ ...p, [s.id]: Number(e.target.value) }))}
+                            className="px-3 py-1.5 rounded-lg text-xs font-mono font-bold theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+                          >
+                            {[4, 3, 2, 1, 0].map((n) => (
+                              <option key={n} value={n}>{n} / 10</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="py-3 px-4 font-mono theme-text-secondary">{c} / 6</td>
+                        <td className="py-3 px-4">
+                          <span className="px-2.5 py-1 rounded font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            {(t + c).toFixed(1)} / 10
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold text-xs px-6 py-3 rounded-xl transition-all cursor-pointer shadow-md"
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {saving ? 'Saqlanmoqda...' : 'Ballarni saqlash'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

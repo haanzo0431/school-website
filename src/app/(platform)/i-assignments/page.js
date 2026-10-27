@@ -1,427 +1,554 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import { 
-  FileText, Clock, CheckCircle2, AlertCircle, 
-  Upload, Plus, ExternalLink, Calendar, X, Send,
-  BookOpen, Sparkles
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Sparkles, CheckCircle2, Loader2, X, Play, Save, AlertCircle, Upload, FileCode, BookOpen,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
-const DEFAULT_ASSIGNMENTS = [
-  {
-    id: '1',
-    subject: 'Physics',
-    title: "Newton's Second Law Lab Presentation",
-    description: 'Prepare a 5-slide Google Slides presentation explaining force, mass, and acceleration with real-world examples.',
-    due_date: '2026-10-08T23:59:00Z',
-    points: 100,
-    teacher: 'M. Sobirova',
-    attachment_url: 'https://slides.google.com',
-    status: 'pending',
-  },
-  {
-    id: '2',
-    subject: 'Mathematics & Algebra',
-    title: 'Quadratic Equations Worksheet #4',
-    description: 'Solve problems 1 through 15 on page 142. Show all work for quadratic formula calculations.',
-    due_date: '2026-10-06T18:00:00Z',
-    points: 50,
-    teacher: 'A. Karimov',
-    attachment_url: null,
-    status: 'pending',
-  },
-  {
-    id: '3',
-    subject: 'Information Technology',
-    title: 'Python Scripting Practice: Loops & Functions',
-    description: 'Submit your main.py file containing functions that compute factorial and prime number checks.',
-    due_date: '2026-10-12T23:59:00Z',
-    points: 100,
-    teacher: 'S. Rahimov',
-    attachment_url: 'https://github.com',
-    status: 'pending',
-  },
-  {
-    id: '4',
-    subject: 'English Language',
-    title: 'IELTS Academic Writing Task 2 Essay',
-    description: 'Write a 250-word essay discussing the impact of artificial intelligence on modern education.',
-    due_date: '2026-10-01T23:59:00Z',
-    points: 100,
-    teacher: 'D. Aliyeva',
-    attachment_url: null,
-    status: 'completed',
-    submitted_at: '2026-09-30T14:20:00Z',
-    submission_link: 'https://docs.google.com/document/d/example',
-    grade: '92/100',
-  },
+const ALL_SUBJECTS = [
+  'Matematika', 'Fizika', 'Ona tili', 'Tarix', 'Informatika',
+  'Ingliz tili', 'CHQBT', 'Jismoniy tarbiya', 'Tarbiya', 'Rus tili',
 ];
+const CLASS_NAME = '10-A';
+const Q_COUNT = 30;
+const MAX_HTML = 2 * 1024 * 1024;
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const emptyQs = () =>
+  Array.from({ length: Q_COUNT }, () => ({ question: '', options: ['', '', '', ''], correct: 0 }));
+const round1 = (n) => Math.round(n * 10) / 10;
+
+// HTML fayl ichidagi "var Q=[[savol,[variantlar],to'g'ri],...];" ni o'qiydi
+function extractQuestions(html) {
+  const m = html.match(/var\s+Q\s*=\s*(\[[\s\S]*?\])\s*;/);
+  if (!m) return null;
+  try {
+    const arr = JSON.parse(m[1]);
+    const qs = arr.map((x) => ({ question: x[0], options: x[1], correct: x[2] }));
+    const ok = qs.length === Q_COUNT && qs.every((q) =>
+      q.question && Array.isArray(q.options) && q.options.length === 4 &&
+      Number.isInteger(q.correct) && q.correct >= 0 && q.correct <= 3);
+    return ok ? qs : null;
+  } catch {
+    return null;
+  }
+}
 
 export default function AssignmentsPage() {
-  const [activeTab, setActiveTab] = useState('pending'); // 'pending' | 'completed'
-  const [assignments, setAssignments] = useState(DEFAULT_ASSIGNMENTS);
-  const [selectedSubject, setSelectedSubject] = useState('All');
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState('student');
-  const [userId, setUserId] = useState(null);
+  const [role, setRole] = useState('student');
+  const [user, setUser] = useState(null);
+  const [subject, setSubject] = useState('');
+  const [studentId, setStudentId] = useState(null);
+  const [date, setDate] = useState(todayStr());
 
-  // Turn in modal state
-  const [selectedAssignment, setSelectedAssignment] = useState(null);
-  const [submissionUrl, setSubmissionUrl] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [tests, setTests] = useState([]);
+  const [questions, setQuestions] = useState([]);
+  const [attempts, setAttempts] = useState([]);
+  const [results, setResults] = useState([]);
+
+  // ustoz
+  const [form, setForm] = useState(emptyQs());
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [topic, setTopic] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const [lessonHtml, setLessonHtml] = useState('');
+  const [lessonName, setLessonName] = useState('');
+
+  // o'quvchi / ota-ona
+  const [active, setActive] = useState(null);
+  const [answers, setAnswers] = useState({});
+  const [result, setResult] = useState(null);
+  const [viewLesson, setViewLesson] = useState(null);
 
   useEffect(() => {
-    async function loadData() {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          setUserId(user.id);
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', user.id)
-            .single();
-          if (profile?.role) setUserRole(profile.role);
-
-          // Attempt to fetch from Supabase 'assignments'
-          const { data: dbAssignments } = await supabase
-            .from('assignments')
-            .select('*')
-            .order('due_date', { ascending: true });
-
-          if (dbAssignments && dbAssignments.length > 0) {
-            setAssignments(dbAssignments);
-          }
+    async function init() {
+      const { data: { user: u } } = await supabase.auth.getUser();
+      if (!u) return;
+      setUser(u);
+      const { data: me } = await supabase
+        .from('profiles').select('role, subject, child_id').eq('id', u.id).maybeSingle();
+      const r = me?.role || 'student';
+      setRole(r);
+      setSubject(me?.subject || '');
+      if (r === 'student') setStudentId(u.id);
+      if (r === 'parent') {
+        let cid = me?.child_id;
+        if (!cid) {
+          const { data: alt } = await supabase
+            .from('profiles').select('id').eq('parent_id', u.id).maybeSingle();
+          cid = alt?.id;
         }
-      } catch (err) {
-        console.error('Error fetching assignments:', err);
-      } finally {
-        setLoading(false);
+        setStudentId(cid || null);
       }
+      setLoading(false);
     }
-    loadData();
+    init();
   }, []);
 
-  const subjects = ['All', ...new Set(assignments.map((a) => a.subject))];
+  const loadDay = useCallback(async () => {
+    if (!user) return;
 
-  const filteredAssignments = assignments.filter((item) => {
-    const matchesTab = activeTab === 'pending' ? item.status !== 'completed' : item.status === 'completed';
-    const matchesSubject = selectedSubject === 'All' || item.subject === selectedSubject;
-    return matchesTab && matchesSubject;
-  });
+    let q = supabase.from('classwork_tests').select('*')
+      .eq('class_name', CLASS_NAME).eq('test_date', date);
+    if (role === 'teacher') q = q.eq('teacher_id', user.id);
+    const { data: t } = await q;
+    setTests(t || []);
 
-  const handleTurnInSubmit = async (e) => {
-    e.preventDefault();
-    if (!selectedAssignment || !submissionUrl) return;
+    const ids = (t || []).map((x) => x.id);
+    if (ids.length) {
+      const { data: qs } = await supabase
+        .from('classwork_test_questions').select('*')
+        .in('test_id', ids).order('position');
+      setQuestions(qs || []);
+    } else {
+      setQuestions([]);
+    }
 
-    setSubmitting(true);
-    try {
-      if (userId) {
-        await supabase.from('submissions').insert([
-          {
-            assignment_id: selectedAssignment.id,
-            student_id: userId,
-            file_url: submissionUrl,
-            status: 'submitted',
-            submitted_at: new Date().toISOString(),
-          },
-        ]);
+    if (role === 'teacher') {
+      const mine = (t || [])[0];
+      setLessonHtml(mine?.lesson_html || '');
+      setLessonName(mine?.lesson_name || '');
+      if (mine) {
+        const { data: qs } = await supabase
+          .from('classwork_test_questions').select('*')
+          .eq('test_id', mine.id).order('position');
+        const filled = emptyQs();
+        (qs || []).slice(0, Q_COUNT).forEach((x, i) => {
+          filled[i] = { question: x.question, options: x.options, correct: x.correct };
+        });
+        setForm(filled);
+      } else {
+        setForm(emptyQs());
       }
+      const { data: att } = await supabase
+        .from('classwork_attempts').select('*')
+        .eq('teacher_id', user.id).eq('lesson_date', date);
+      const { data: studs } = await supabase
+        .from('profiles').select('id, first_name, surname, name')
+        .eq('role', 'student').eq('class', CLASS_NAME);
+      const rows = (studs || []).map((s) => {
+        const mineAtt = (att || []).filter((a) => a.student_id === s.id);
+        return {
+          id: s.id,
+          name: `${s.surname || ''} ${s.first_name || s.name || ''}`.trim(),
+          count: mineAtt.length,
+          avg: mineAtt.length
+            ? mineAtt.reduce((a, b) => a + Number(b.score), 0) / mineAtt.length
+            : 0,
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+      setResults(rows);
+    } else if (studentId) {
+      const { data: att } = await supabase
+        .from('classwork_attempts').select('*')
+        .eq('student_id', studentId).eq('lesson_date', date);
+      setAttempts(att || []);
+    }
+  }, [user, role, date, studentId]);
 
-      // Update local state instantly
-      setAssignments((prev) =>
-        prev.map((item) =>
-          item.id === selectedAssignment.id
-            ? {
-                ...item,
-                status: 'completed',
-                submitted_at: new Date().toISOString(),
-                submission_link: submissionUrl,
-              }
-            : item
-        )
-      );
+  useEffect(() => { loadDay(); }, [loadDay]);
 
-      setSelectedAssignment(null);
-      setSubmissionUrl('');
-    } catch (err) {
-      console.error('Error submitting work:', err);
+  // ---------- Ustoz ----------
+  const questionsReady = form.every(
+    (q) => q.question.trim() && q.options.every((o) => o.trim())
+  );
+
+  const onPickHtml = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!/\.html?$/i.test(file.name)) {
+      setToast({ type: 'error', text: 'Faqat .html fayl yuklang.' });
+      return;
+    }
+    if (file.size > MAX_HTML) {
+      setToast({ type: 'error', text: 'Fayl 2 MB dan katta.' });
+      return;
+    }
+    const text = await file.text();
+    setLessonHtml(text);
+    setLessonName(file.name);
+    const qs = extractQuestions(text);
+    if (qs) {
+      setForm(qs);
+      setToast({ type: 'success', text: `${file.name} yuklandi, ${Q_COUNT} ta savol fayldan o'qildi. "Dars va testni saqlash" ni bosing.` });
+    } else {
+      setToast({ type: 'success', text: `${file.name} yuklandi. Fayldan savollar topilmadi, "${Q_COUNT} ta savol yaratish" ni bosing.` });
+    }
+  };
+
+  const generateTest = async () => {
+    if (!topic.trim() && !lessonHtml) {
+      setToast({ type: 'error', text: 'Dars mavzusini yozing yoki HTML fayl yuklang.' });
+      return;
+    }
+    setGenerating(true);
+    setToast(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/classwork/generate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ subject, topic, className: CLASS_NAME, lessonHtml }),
+      });
+      const raw = await res.text();
+      let data = {};
+      try { data = JSON.parse(raw); } catch {}
+      if (!res.ok) throw new Error(data.error || `Server javobi bo'sh (${res.status}). Terminalni tekshiring.`);
+      setForm(data.questions.map((q) => ({
+        question: q.question, options: q.options, correct: q.correct,
+      })));
+      setToast({ type: 'success', text: `${Q_COUNT} ta savol tayyor. "Dars va testni saqlash" ni bosing.` });
+    } catch (e) {
+      setToast({ type: 'error', text: e.message });
     } finally {
-      setSubmitting(false);
+      setGenerating(false);
     }
   };
 
-  const formatDueDate = (dateString) => {
-    if (!dateString) return 'No Deadline';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+  const saveTest = async () => {
+    if (!questionsReady) {
+      setToast({ type: 'error', text: `Avval ${Q_COUNT} ta savol tayyor bo'lsin: HTML fayl yuklang yoki "${Q_COUNT} ta savol yaratish" ni bosing.` });
+      return;
+    }
+    setSaving(true);
+    setToast(null);
+    const { data: test, error } = await supabase
+      .from('classwork_tests')
+      .upsert([{
+        teacher_id: user.id, subject, class_name: CLASS_NAME, test_date: date,
+        lesson_html: lessonHtml || null, lesson_name: lessonName || null,
+      }], { onConflict: 'teacher_id,class_name,test_date' })
+      .select().single();
+    if (error) {
+      setToast({ type: 'error', text: error.message });
+      setSaving(false);
+      return;
+    }
+    await supabase.from('classwork_test_questions').delete().eq('test_id', test.id);
+    const { error: e2 } = await supabase.from('classwork_test_questions').insert(
+      form.map((q, i) => ({
+        test_id: test.id, position: i + 1,
+        question: q.question.trim(), options: q.options.map((o) => o.trim()), correct: q.correct,
+      }))
+    );
+    setToast(e2
+      ? { type: 'error', text: e2.message }
+      : { type: 'success', text: `${date} uchun dars va test saqlandi.` });
+    setSaving(false);
+    loadDay();
   };
 
-  const getDeadlineBadge = (dateString) => {
-    const due = new Date(dateString).getTime();
-    const now = new Date().getTime();
-    const diffHours = (due - now) / (1000 * 60 * 60);
+  // ---------- O'quvchi ----------
+  const testFor = (subj) => tests.find((t) => t.subject === subj);
+  const qsFor = (test) => questions.filter((q) => q.test_id === test?.id);
+  const attFor = (test) => attempts.filter((a) => a.teacher_id === test?.teacher_id);
+  const avgFor = (test) => {
+    const l = attFor(test);
+    return l.length ? l.reduce((s, a) => s + Number(a.score), 0) / l.length : 0;
+  };
 
-    if (diffHours < 0) {
-      return { text: 'Overdue', color: 'bg-rose-500/10 text-rose-400 border-rose-500/20' };
-    }
-    if (diffHours <= 48) {
-      return { text: 'Due Soon', color: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
-    }
-    return { text: 'Upcoming', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
+  const submit = async () => {
+    const list = qsFor(active);
+    const correct = list.reduce((s, q, i) => s + (answers[i] === q.correct ? 1 : 0), 0);
+    const score = list.length ? round1((correct / list.length) * 6) : 0;
+    setSaving(true);
+    const { data, error } = await supabase.from('classwork_attempts').insert([{
+      student_id: user.id, teacher_id: active.teacher_id, subject: active.subject,
+      lesson_date: date, attempt_no: attFor(active).length + 1, score,
+    }]).select().single();
+    if (!error && data) setAttempts((p) => [...p, data]);
+    setResult(error ? { error: error.message } : { correct, total: list.length, score });
+    setSaving(false);
   };
 
   if (loading) {
     return (
-      <div className="p-10 flex items-center justify-center text-xs font-mono theme-text-secondary">
-        Loading classroom tasks...
+      <div className="p-16 flex items-center justify-center gap-2 text-xs font-mono theme-text-secondary">
+        <Loader2 className="w-5 h-5 animate-spin text-emerald-400" /> Yuklanmoqda...
       </div>
     );
   }
 
+  const header = (
+    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
+      <div>
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono mb-2">
+          <Sparkles className="w-3.5 h-3.5" /> Classwork
+        </div>
+        <h1 className="text-3xl font-serif font-bold">Classwork</h1>
+        <p className="text-xs theme-text-secondary mt-1">
+          {role === 'teacher'
+            ? `Fan: ${subject || '-'} | Sinf: ${CLASS_NAME}. Har kun uchun 1 ta dars (HTML) va ${Q_COUNT} ta savollik test.`
+            : `Sinf ${CLASS_NAME}. Test ${Q_COUNT} savol, natija 6 ballik shkalaga o'tkaziladi. Kuniga 3 urinish, o'rtacha olinadi.`}
+        </p>
+      </div>
+      <input
+        type="date" value={date} onChange={(e) => setDate(e.target.value)}
+        className="px-3 py-2 rounded-xl text-xs theme-bg-card border theme-border focus:outline-none focus:border-emerald-500"
+      />
+    </div>
+  );
+
+  // ================= USTOZ =================
+  if (role === 'teacher') {
+    return (
+      <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
+        {header}
+
+        {toast && (
+          <div className={`p-4 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
+            toast.type === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+            {toast.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+            {toast.text}
+          </div>
+        )}
+
+        <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-6">
+          <h2 className="font-serif font-bold text-lg">
+            {date} uchun dars {tests.length ? '(tahrirlash)' : '(yangi)'}
+          </h2>
+
+          <div className="p-4 rounded-2xl theme-bg-page border theme-border space-y-3">
+            <label className="block text-xs font-mono font-bold uppercase theme-text-secondary">
+              Dars fayli (HTML)
+            </label>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold theme-bg-card border theme-border hover:border-emerald-500 cursor-pointer">
+                <Upload className="w-4 h-4 text-emerald-400" /> HTML fayl tanlash
+                <input type="file" accept=".html,.htm,text/html" onChange={onPickHtml} className="hidden" />
+              </label>
+              {lessonName ? (
+                <span className="inline-flex items-center gap-2 text-xs font-mono text-emerald-400">
+                  <FileCode className="w-4 h-4" /> {lessonName}
+                  <button type="button" onClick={() => { setLessonHtml(''); setLessonName(''); }}
+                    className="text-rose-400 cursor-pointer"><X className="w-3.5 h-3.5" /></button>
+                  {lessonHtml && (
+                    <button type="button" onClick={() => setViewLesson({ html: lessonHtml, name: lessonName })}
+                      className="underline cursor-pointer">ko'rish</button>
+                  )}
+                </span>
+              ) : (
+                <span className="text-xs theme-text-secondary">Fayl yuklanmagan (maks. 2 MB).</span>
+              )}
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl theme-bg-page border border-emerald-500/30 space-y-3">
+            <label className="block text-xs font-mono font-bold uppercase theme-text-secondary">
+              AI bilan savol yaratish (ixtiyoriy)
+            </label>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="text" value={topic} onChange={(e) => setTopic(e.target.value)}
+                placeholder="Dars mavzusi, masalan: Diskriminant"
+                className="flex-1 px-4 py-2.5 rounded-xl text-xs theme-bg-card border theme-border focus:outline-none focus:border-emerald-500"
+              />
+              <button
+                type="button" onClick={generateTest} disabled={generating || !subject}
+                className="inline-flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold text-xs px-5 py-2.5 rounded-xl cursor-pointer"
+              >
+                {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                {generating ? 'Tuzilmoqda (1 daqiqagacha)...' : `${Q_COUNT} ta savol yaratish`}
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl theme-bg-page border theme-border text-xs font-mono">
+            {questionsReady
+              ? <span className="text-emerald-400">{Q_COUNT} ta savol tayyor. "Dars va testni saqlash" ni bosing.</span>
+              : <span className="theme-text-secondary">Savollar hali tayyor emas. Savollari bor HTML fayl yuklang yoki "{Q_COUNT} ta savol yaratish" ni bosing.</span>}
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              onClick={saveTest} disabled={saving || !subject}
+              className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold text-xs px-6 py-3 rounded-xl cursor-pointer"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Dars va testni saqlash
+            </button>
+          </div>
+        </div>
+
+        <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4">
+          <h2 className="font-serif font-bold text-lg">{date} natijalari</h2>
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b theme-border theme-text-secondary font-mono uppercase text-[10px]">
+                <th className="py-3 px-4">O'quvchi</th>
+                <th className="py-3 px-4">Urinishlar</th>
+                <th className="py-3 px-4">O'rtacha (6)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y theme-border">
+              {results.map((r) => (
+                <tr key={r.id}>
+                  <td className="py-3 px-4 font-semibold">{r.name}</td>
+                  <td className="py-3 px-4 font-mono">{r.count} / 3</td>
+                  <td className="py-3 px-4 font-mono font-bold">{r.avg.toFixed(1)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <LessonModal lesson={viewLesson} onClose={() => setViewLesson(null)} />
+      </div>
+    );
+  }
+
+  // ================= O'QUVCHI / OTA-ONA =================
+  const isParent = role === 'parent';
+  const activeQs = active ? qsFor(active) : [];
+
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono mb-2">
-            <Sparkles className="w-3.5 h-3.5" /> Classroom Assignment Hub
-          </div>
-          <h1 className="text-3xl font-serif font-bold">Classwork & Homework</h1>
-          <p className="text-xs theme-text-secondary mt-1">
-            Track upcoming deadlines, submit presentations, and view graded coursework.
-          </p>
-        </div>
+      {header}
 
-        {userRole === 'teacher' && (
-          <Link
-            href="/editor"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold transition-all shadow-md shrink-0"
-          >
-            <Plus className="w-4 h-4" /> Create New Assignment
-          </Link>
-        )}
-      </div>
-
-      {/* Tabs & Subject Filter */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        {/* Pending vs Completed Tabs */}
-        <div className="flex items-center gap-2 p-1.5 theme-bg-card border theme-border rounded-2xl">
-          <button
-            onClick={() => setActiveTab('pending')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'pending'
-                ? 'bg-emerald-500 text-black shadow-sm'
-                : 'theme-text-secondary hover:theme-text-primary'
-            }`}
-          >
-            <Clock className="w-3.5 h-3.5" /> Assigned / To-Do
-            <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-black/20 font-mono">
-              {assignments.filter((a) => a.status !== 'completed').length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('completed')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'completed'
-                ? 'bg-emerald-500 text-black shadow-sm'
-                : 'theme-text-secondary hover:theme-text-primary'
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" /> Completed
-            <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-black/20 font-mono">
-              {assignments.filter((a) => a.status === 'completed').length}
-            </span>
-          </button>
-        </div>
-
-        {/* Subject Dropdown Filter */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs theme-text-secondary font-mono">Subject:</span>
-          <select
-            value={selectedSubject}
-            onChange={(e) => setSelectedSubject(e.target.value)}
-            className="px-3 py-2 rounded-xl text-xs theme-bg-card border theme-border font-medium focus:outline-none focus:border-emerald-500"
-          >
-            {subjects.map((sub) => (
-              <option key={sub} value={sub}>
-                {sub}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Assignments List */}
-      {filteredAssignments.length === 0 ? (
-        <div className="p-12 text-center theme-bg-card border theme-border rounded-3xl space-y-3">
-          <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto opacity-80" />
-          <h3 className="font-serif font-bold text-base">No tasks found</h3>
-          <p className="text-xs theme-text-secondary max-w-sm mx-auto">
-            {activeTab === 'pending'
-              ? "You're all caught up! No pending homework or presentations for this selection."
-              : 'No completed assignments recorded yet.'}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {filteredAssignments.map((assignment) => {
-            const badge = getDeadlineBadge(assignment.due_date);
-            return (
-              <div
-                key={assignment.id}
-                className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4 hover:border-emerald-500/30 transition-all flex flex-col md:flex-row md:items-center justify-between gap-6"
-              >
-                <div className="space-y-2.5 max-w-2xl">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[10px] font-mono font-bold uppercase px-2.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      {assignment.subject}
-                    </span>
-                    {activeTab === 'pending' && (
-                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${badge.color}`}>
-                        {badge.text}
-                      </span>
-                    )}
-                    <span className="text-[10px] theme-text-secondary font-mono">
-                      {assignment.points} Points
-                    </span>
-                  </div>
-
-                  <h2 className="text-lg font-serif font-bold">{assignment.title}</h2>
-                  <p className="text-xs theme-text-secondary leading-relaxed">
-                    {assignment.description}
-                  </p>
-
-                  <div className="flex items-center gap-4 text-xs theme-text-secondary pt-1 flex-wrap">
-                    <span className="flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-emerald-500" />
-                      Due: {formatDueDate(assignment.due_date)}
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <BookOpen className="w-3.5 h-3.5 text-emerald-500" />
-                      Teacher: {assignment.teacher}
-                    </span>
-                  </div>
-
-                  {assignment.attachment_url && (
-                    <a
-                      href={assignment.attachment_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:underline pt-1 font-medium"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" /> Teacher Resource / Attachment
-                    </a>
-                  )}
-                </div>
-
-                {/* Right Action side */}
-                <div className="shrink-0 flex flex-col items-start md:items-end justify-between border-t md:border-t-0 pt-4 md:pt-0 theme-border gap-3">
-                  {activeTab === 'pending' ? (
-                    <button
-                      onClick={() => setSelectedAssignment(assignment)}
-                      className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black px-5 py-2.5 rounded-2xl text-xs font-bold transition-all shadow-md cursor-pointer"
-                    >
-                      <Upload className="w-3.5 h-3.5" /> Turn In Work
-                    </button>
-                  ) : (
-                    <div className="space-y-1.5 text-right">
-                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-mono">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Submitted
-                      </span>
-                      {assignment.grade && (
-                        <p className="text-xs font-mono font-bold text-emerald-400">
-                          Grade: {assignment.grade}
-                        </p>
-                      )}
-                      {assignment.submission_link && (
-                        <a
-                          href={assignment.submission_link}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block text-[11px] theme-text-secondary hover:underline"
-                        >
-                          View Submission →
-                        </a>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      {isParent && !studentId && (
+        <p className="text-xs font-mono text-rose-400">Farzandingiz akkauntga ulanmagan.</p>
       )}
 
-      {/* TURN IN MODAL */}
-      {selectedAssignment && (
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {ALL_SUBJECTS.map((subj) => {
+          const test = testFor(subj);
+          const used = test ? attFor(test).length : 0;
+          return (
+            <div key={subj} className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4">
+              <h3 className="font-serif font-bold text-lg">{subj}</h3>
+              {!test ? (
+                <p className="text-xs theme-text-secondary">Bu kunga dars qo'yilmagan.</p>
+              ) : (
+                <>
+                  <div className="text-xs font-mono theme-text-secondary space-y-1">
+                    <div>Urinishlar: {used} / 3</div>
+                    <div>
+                      Classwork balli:{' '}
+                      <span className="text-emerald-400 font-bold">{avgFor(test).toFixed(1)} / 6</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {test.lesson_html && (
+                      <button
+                        onClick={() => setViewLesson({ html: test.lesson_html, name: test.lesson_name || subj })}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold theme-bg-page border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 cursor-pointer"
+                      >
+                        <BookOpen className="w-3.5 h-3.5" /> Darsni ochish
+                      </button>
+                    )}
+                    {!isParent && (
+                      used >= 3 ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-emerald-400 font-mono">
+                          <CheckCircle2 className="w-4 h-4" /> Urinishlar tugadi
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => { setActive(test); setAnswers({}); setResult(null); }}
+                          className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2.5 rounded-xl text-xs font-bold cursor-pointer"
+                        >
+                          <Play className="w-3.5 h-3.5" /> {used === 0 ? 'Testni boshlash' : `${used + 1}-urinish`}
+                        </button>
+                      )
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {active && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="p-6 theme-bg-card border theme-border rounded-3xl max-w-lg w-full space-y-5 shadow-2xl relative">
-            <button
-              onClick={() => setSelectedAssignment(null)}
-              className="absolute right-5 top-5 p-1 rounded-xl hover:bg-emerald-500/10 theme-text-secondary"
-            >
+          <div className="theme-bg-card border theme-border rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 space-y-5 relative">
+            <button onClick={() => setActive(null)} className="absolute right-5 top-5 p-1 theme-text-secondary">
               <X className="w-5 h-5" />
             </button>
+            <h3 className="text-xl font-serif font-bold">{active.subject}</h3>
 
-            <div>
-              <span className="text-[10px] font-mono text-emerald-400 font-bold uppercase">
-                {selectedAssignment.subject}
-              </span>
-              <h3 className="text-xl font-serif font-bold mt-1">Submit Assignment</h3>
-              <p className="text-xs theme-text-secondary mt-1">
-                {selectedAssignment.title}
-              </p>
-            </div>
-
-            <form onSubmit={handleTurnInSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-mono theme-text-secondary mb-1.5">
-                  Link to Presentation or Google Doc / File URL *
-                </label>
-                <input
-                  type="url"
-                  required
-                  placeholder="https://docs.google.com/presentation/d/..."
-                  value={submissionUrl}
-                  onChange={(e) => setSubmissionUrl(e.target.value)}
-                  className="w-full px-4 py-3 rounded-2xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
-                />
-                <p className="text-[10px] theme-text-secondary mt-1">
-                  Ensure link permissions are set to &quot;Anyone with link can view&quot;.
+            {result ? (
+              <div className="space-y-4 text-center py-6">
+                {result.error ? (
+                  <p className="text-rose-400 text-xs font-mono">{result.error}</p>
+                ) : (
+                  <>
+                    <div className="text-4xl font-bold text-emerald-400">{result.correct} / {result.total}</div>
+                    <p className="text-sm">Bu urinish: <b>{result.score.toFixed(1)} / 6</b> ball</p>
+                    <p className="text-xs theme-text-secondary">
+                      O'rtacha classwork balli: {avgFor(active).toFixed(1)} / 6
+                    </p>
+                  </>
+                )}
+                <button onClick={() => setActive(null)}
+                  className="bg-emerald-500 text-black px-5 py-2.5 rounded-xl text-xs font-bold cursor-pointer">
+                  Yopish
+                </button>
+              </div>
+            ) : (
+              <>
+                <p className="text-[11px] font-mono theme-text-secondary">
+                  Javob berilgan: {Object.keys(answers).length} / {activeQs.length}
                 </p>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedAssignment(null)}
-                  className="px-4 py-2.5 rounded-xl text-xs font-semibold theme-text-secondary hover:theme-text-primary"
-                >
-                  Cancel
+                {activeQs.map((q, i) => (
+                  <div key={q.id} className="space-y-2">
+                    <p className="text-sm font-semibold">{i + 1}. {q.question}</p>
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {q.options.map((o, j) => (
+                        <button key={j} type="button"
+                          onClick={() => setAnswers((p) => ({ ...p, [i]: j }))}
+                          className={`text-left px-4 py-2.5 rounded-xl text-xs border cursor-pointer ${
+                            answers[i] === j
+                              ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 font-bold'
+                              : 'theme-bg-page theme-border'}`}>
+                          {o}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <button onClick={submit} disabled={saving}
+                  className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black py-3 rounded-xl text-xs font-bold cursor-pointer">
+                  {saving ? 'Yuborilmoqda...' : 'Javoblarni yuborish'}
                 </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black px-5 py-2.5 rounded-xl text-xs font-bold transition-all disabled:opacity-50"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                  {submitting ? 'Submitting...' : 'Mark as Done & Submit'}
-                </button>
-              </div>
-            </form>
+              </>
+            )}
           </div>
         </div>
       )}
+
+      <LessonModal lesson={viewLesson} onClose={() => setViewLesson(null)} />
+    </div>
+  );
+}
+
+function LessonModal({ lesson, onClose }) {
+  if (!lesson) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-3">
+      <div className="theme-bg-card border theme-border rounded-3xl w-full max-w-5xl h-[90vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b theme-border">
+          <span className="text-xs font-mono text-emerald-400 flex items-center gap-2">
+            <FileCode className="w-4 h-4" /> {lesson.name}
+          </span>
+          <button onClick={onClose} className="p-1 theme-text-secondary cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <iframe
+          title={lesson.name}
+          srcDoc={lesson.html}
+          sandbox="allow-scripts"
+          className="flex-1 w-full bg-white"
+        />
+      </div>
     </div>
   );
 }

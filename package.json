@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "NODE_OPTIONS='--max-old-space-size=2048' next dev --turbo",
+    "dev":"cross-env NODE_OPTIONS=--max-old-space-size=2048 next dev --turbo",
     "build": "next build",
     "build:mobile": "next build && npx cap sync android",
     "cap:sync": "npx cap sync",

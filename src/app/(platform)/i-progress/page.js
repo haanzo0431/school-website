@@ -1,340 +1,224 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  TrendingUp, Calendar, Award, CheckCircle2, 
-  XCircle, Clock, AlertCircle, User, BookOpen, 
-  Loader2, Sparkles, ShieldCheck
-} from 'lucide-react';
+import { Award, BookOpen, Loader2, User, CalendarDays } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
-export default function StudentProgressPage() {
-  const [students, setStudents] = useState([]);
-  const [selectedStudentId, setSelectedStudentId] = useState('');
-  
-  const [attendanceRecords, setAttendanceRecords] = useState([]);
-  const [gradeRecords, setGradeRecords] = useState([]);
-  
+const ALL_SUBJECTS = [
+  'Matematika', 'Fizika', 'Ona tili', 'Tarix', 'Informatika',
+  'Ingliz tili', 'CHQBT', 'Jismoniy tarbiya', 'Tarbiya', 'Rus tili',
+];
+
+export default function ChildProgressPage() {
+  const [child, setChild] = useState(null);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('grades'); // 'grades' | 'attendance'
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState('Hammasi');
 
-  // Fetch list of students
   useEffect(() => {
-    fetchStudents();
-  }, []);
+    async function load() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
 
-  // Fetch progress data whenever student selection changes
-  useEffect(() => {
-    if (selectedStudentId) {
-      fetchStudentProgress(selectedStudentId);
-    }
-  }, [selectedStudentId]);
+        const { data: me } = await supabase
+          .from('profiles').select('child_id').eq('id', user.id).maybeSingle();
 
-  const fetchStudents = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, name, surname, email, class_name')
-        .eq('role', 'student');
+        let childId = me?.child_id;
+        if (!childId) {
+          const { data: alt } = await supabase
+            .from('profiles').select('id').eq('parent_id', user.id).maybeSingle();
+          childId = alt?.id;
+        }
+        if (!childId) {
+          setError('Farzandingiz akkauntga ulanmagan.');
+          return;
+        }
 
-      if (error) throw error;
+        const { data: kid } = await supabase
+          .from('profiles').select('*').eq('id', childId).maybeSingle();
+        setChild(kid);
 
-      if (data && data.length > 0) {
-        setStudents(data);
-        setSelectedStudentId(data[0].id);
-      } else {
+        const { data: scores } = await supabase
+          .from('formative_view').select('*')
+          .eq('student_id', childId)
+          .order('lesson_date', { ascending: false });
+        setRows(scores || []);
+      } catch (e) {
+        setError(e.message);
+      } finally {
         setLoading(false);
       }
-    } catch (err) {
-      console.error('Error loading students:', err.message);
-      setLoading(false);
     }
-  };
+    load();
+  }, []);
 
-  const fetchStudentProgress = async (studentId) => {
-    setLoading(true);
-    try {
-      // 1. Fetch student attendance history
-      const { data: attData, error: attErr } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('student_id', studentId)
-        .order('date', { ascending: false });
+  const bySubject = {};
+  rows.forEach((r) => {
+    (bySubject[r.subject] = bySubject[r.subject] || []).push(r);
+  });
 
-      if (attErr) throw attErr;
+  const subjectStats = ALL_SUBJECTS.map((name) => {
+    const list = bySubject[name] || [];
+    return {
+      name,
+      count: list.length,
+      avg: list.length
+        ? list.reduce((s, r) => s + Number(r.total), 0) / list.length
+        : null,
+    };
+  });
 
-      // 2. Fetch student grade records across all subjects
-      const { data: gradeData, error: gradeErr } = await supabase
-        .from('grades')
-        .select('*')
-        .eq('student_id', studentId);
+  const graded = subjectStats.filter((s) => s.avg !== null);
+  const overall = graded.length
+    ? (graded.reduce((s, x) => s + x.avg, 0) / graded.length).toFixed(1)
+    : '-';
 
-      if (gradeErr) throw gradeErr;
+  const visible = rows.filter((r) => filter === 'Hammasi' || r.subject === filter);
+  const childName = child
+    ? `${child.surname || ''} ${child.first_name || child.name || ''}`.trim()
+    : '';
 
-      setAttendanceRecords(attData || []);
-      setGradeRecords(gradeData || []);
-    } catch (err) {
-      console.error('Error fetching progress records:', err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (loading) {
+    return (
+      <div className="p-16 flex items-center justify-center gap-2 text-xs font-mono theme-text-secondary">
+        <Loader2 className="w-5 h-5 animate-spin text-emerald-400" /> Yuklanmoqda...
+      </div>
+    );
+  }
 
-  // Metric calculations
-  const totalAttendance = attendanceRecords.length;
-  const presentCount = attendanceRecords.filter((r) => r.status === 'present').length;
-  const lateCount = attendanceRecords.filter((r) => r.status === 'late').length;
-  const absentCount = attendanceRecords.filter((r) => r.status === 'absent').length;
-  const excusedCount = attendanceRecords.filter((r) => r.status === 'excused').length;
-
-  const attendanceRate = totalAttendance > 0 
-    ? Math.round(((presentCount + lateCount) / totalAttendance) * 100) 
-    : 100;
-
-  const calculateSubjectAvg = (g) => {
-    const scores = [g.q1, g.q2, g.exam].map(Number).filter((n) => !isNaN(n) && n > 0);
-    if (scores.length === 0) return '5.0';
-    const sum = scores.reduce((a, b) => a + b, 0);
-    return (sum / scores.length).toFixed(1);
-  };
-
-  const overallGpa = gradeRecords.length > 0
-    ? (
-        gradeRecords.reduce((acc, g) => acc + Number(calculateSubjectAvg(g)), 0) /
-        gradeRecords.length
-      ).toFixed(2)
-    : '5.0';
-
-  const selectedStudent = students.find((s) => s.id === selectedStudentId);
+  if (error) {
+    return (
+      <div className="p-10 text-center text-xs font-mono text-rose-400">{error}</div>
+    );
+  }
 
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b theme-border pb-6">
-        <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono mb-2">
-            <TrendingUp className="w-3.5 h-3.5" /> Parent & Student Portal
+      <div className="border-b theme-border pb-6">
+        <span className="inline-block px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-semibold rounded-full mb-2 border border-emerald-500/20 font-mono">
+          Parent Portal
+        </span>
+        <h1 className="text-3xl font-serif font-bold">Child Progress</h1>
+        <p className="text-xs theme-text-secondary mt-1 flex items-center gap-1.5">
+          <User className="w-3.5 h-3.5 text-emerald-500" />
+          {childName || 'Farzand'} {child?.class ? `• ${child.class} sinf` : ''}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="p-5 theme-bg-card border theme-border rounded-3xl flex items-center gap-4">
+          <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-2xl">
+            <Award className="w-6 h-6" />
           </div>
-          <h1 className="text-3xl font-serif font-bold">Academic Progress Report</h1>
-          <p className="text-xs theme-text-secondary mt-1">
-            Real-time track record of grades, term scores, and daily school attendance.
-          </p>
+          <div>
+            <div className="text-[10px] font-mono theme-text-secondary uppercase">O'rtacha ball</div>
+            <div className="text-2xl font-bold font-mono">
+              {overall} <span className="text-xs">/ 10</span>
+            </div>
+          </div>
+        </div>
+        <div className="p-5 theme-bg-card border theme-border rounded-3xl flex items-center gap-4">
+          <div className="p-3 bg-blue-500/10 text-blue-400 rounded-2xl">
+            <BookOpen className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="text-[10px] font-mono theme-text-secondary uppercase">Baholangan fanlar</div>
+            <div className="text-2xl font-bold font-mono">
+              {graded.length} <span className="text-xs">/ {ALL_SUBJECTS.length}</span>
+            </div>
+          </div>
+        </div>
+        <div className="p-5 theme-bg-card border theme-border rounded-3xl flex items-center gap-4">
+          <div className="p-3 bg-amber-500/10 text-amber-400 rounded-2xl">
+            <CalendarDays className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="text-[10px] font-mono theme-text-secondary uppercase">Baholangan kunlar</div>
+            <div className="text-2xl font-bold font-mono">
+              {new Set(rows.map((r) => r.lesson_date)).size}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4">
+        <h2 className="text-sm font-serif font-bold border-b theme-border pb-4">Fanlar bo'yicha</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b theme-border theme-text-secondary font-mono uppercase text-[10px]">
+                <th className="py-3 px-4">Fan</th>
+                <th className="py-3 px-4">Baholangan darslar</th>
+                <th className="py-3 px-4">O'rtacha (10)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y theme-border">
+              {subjectStats.map((s) => (
+                <tr key={s.name}>
+                  <td className="py-3.5 px-4 font-bold text-emerald-400">{s.name}</td>
+                  <td className="py-3.5 px-4 font-mono">{s.count}</td>
+                  <td className="py-3.5 px-4 font-mono font-bold">
+                    {s.avg === null ? '-' : `${s.avg.toFixed(1)} / 10`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b theme-border pb-4">
+          <h2 className="text-sm font-serif font-bold">Kunlik baholar</h2>
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="px-3 py-2 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+          >
+            <option value="Hammasi">Hammasi</option>
+            {ALL_SUBJECTS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
         </div>
 
-        {/* Student Selector */}
-        {students.length > 0 && (
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono theme-text-secondary">Student:</span>
-            <select
-              value={selectedStudentId}
-              onChange={(e) => setSelectedStudentId(e.target.value)}
-              className="px-4 py-2.5 rounded-xl text-xs font-semibold theme-bg-card border theme-border focus:outline-none focus:border-emerald-500 cursor-pointer"
-            >
-              {students.map((st) => (
-                <option key={st.id} value={st.id}>
-                  {st.name} {st.surname} ({st.class_name || '10-A'})
-                </option>
-              ))}
-            </select>
+        {visible.length === 0 ? (
+          <p className="text-xs font-mono theme-text-secondary py-8 text-center">
+            Hali baho qo'yilmagan.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b theme-border theme-text-secondary font-mono uppercase text-[10px]">
+                  <th className="py-3 px-4">Sana</th>
+                  <th className="py-3 px-4">Fan</th>
+                  <th className="py-3 px-4">Ustoz (4)</th>
+                  <th className="py-3 px-4">Classwork (6)</th>
+                  <th className="py-3 px-4">Jami</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y theme-border">
+                {visible.map((r, i) => (
+                  <tr key={i} className="hover:bg-emerald-500/5 transition-colors">
+                    <td className="py-3 px-4 font-mono">{r.lesson_date}</td>
+                    <td className="py-3 px-4">{r.subject}</td>
+                    <td className="py-3 px-4 font-mono">{r.teacher_points}</td>
+                    <td className="py-3 px-4 font-mono">{Number(r.classwork_points).toFixed(1)}</td>
+                    <td className="py-3 px-4">
+                      <span className="px-2.5 py-1 rounded font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        {Number(r.total).toFixed(1)} / 10
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
-
-      {loading ? (
-        <div className="p-16 flex flex-col items-center justify-center text-xs font-mono theme-text-secondary gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-emerald-400" />
-          Loading progress metrics from Supabase...
-        </div>
-      ) : !selectedStudent ? (
-        <div className="p-12 text-center text-xs font-mono theme-text-secondary border theme-border rounded-3xl">
-          No student profiles found. Add student profiles in Supabase to view report cards.
-        </div>
-      ) : (
-        <>
-          {/* Overview Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-5 theme-bg-card border theme-border rounded-2xl flex items-center gap-4">
-              <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400">
-                <Award className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-[11px] font-mono theme-text-secondary uppercase">Average GPA</p>
-                <p className="text-2xl font-bold font-mono">{overallGpa} <span className="text-xs text-emerald-400 font-normal">/ 5.0</span></p>
-              </div>
-            </div>
-
-            <div className="p-5 theme-bg-card border theme-border rounded-2xl flex items-center gap-4">
-              <div className="p-3 rounded-xl bg-blue-500/10 text-blue-400">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-[11px] font-mono theme-text-secondary uppercase">Attendance Rate</p>
-                <p className="text-2xl font-bold font-mono">{attendanceRate}%</p>
-              </div>
-            </div>
-
-            <div className="p-5 theme-bg-card border theme-border rounded-2xl flex items-center gap-4">
-              <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400">
-                <Clock className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-[11px] font-mono theme-text-secondary uppercase">Late Arrivals</p>
-                <p className="text-2xl font-bold font-mono">{lateCount} <span className="text-xs theme-text-secondary font-normal">days</span></p>
-              </div>
-            </div>
-
-            <div className="p-5 theme-bg-card border theme-border rounded-2xl flex items-center gap-4">
-              <div className="p-3 rounded-xl bg-rose-500/10 text-rose-400">
-                <XCircle className="w-6 h-6" />
-              </div>
-              <div>
-                <p className="text-[11px] font-mono theme-text-secondary uppercase">Unexcused Absences</p>
-                <p className="text-2xl font-bold font-mono">{absentCount} <span className="text-xs theme-text-secondary font-normal">days</span></p>
-              </div>
-            </div>
-          </div>
-
-          {/* Tab Controls */}
-          <div className="flex border-b theme-border space-x-6 text-xs font-semibold">
-            <button
-              onClick={() => setActiveTab('grades')}
-              className={`pb-3 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-                activeTab === 'grades'
-                  ? 'border-emerald-500 text-emerald-400'
-                  : 'border-transparent theme-text-secondary hover:text-white'
-              }`}
-            >
-              <BookOpen className="w-4 h-4" />
-              <span>Subject Performance & Grades ({gradeRecords.length})</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('attendance')}
-              className={`pb-3 border-b-2 transition-all cursor-pointer flex items-center gap-2 ${
-                activeTab === 'attendance'
-                  ? 'border-emerald-500 text-emerald-400'
-                  : 'border-transparent theme-text-secondary hover:text-white'
-              }`}
-            >
-              <Calendar className="w-4 h-4" />
-              <span>Attendance History ({attendanceRecords.length})</span>
-            </button>
-          </div>
-
-          {/* TAB 1: ACADEMIC GRADES */}
-          {activeTab === 'grades' && (
-            <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-serif font-bold">
-                  Official Grade Card: {selectedStudent.name} {selectedStudent.surname}
-                </h2>
-                <span className="text-xs theme-text-secondary font-mono">Scale: 1 to 5</span>
-              </div>
-
-              {gradeRecords.length === 0 ? (
-                <div className="p-12 text-center text-xs font-mono theme-text-secondary">
-                  No published grades available for this student yet.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b theme-border theme-text-secondary text-[11px] font-mono uppercase">
-                        <th className="py-3 px-4">Subject</th>
-                        <th className="py-3 px-4">Q1 Grade</th>
-                        <th className="py-3 px-4">Q2 Grade</th>
-                        <th className="py-3 px-4">Exam Score</th>
-                        <th className="py-3 px-4">Average</th>
-                        <th className="py-3 px-4">Teacher Notes</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y theme-border">
-                      {gradeRecords.map((g) => {
-                        const avg = calculateSubjectAvg(g);
-                        return (
-                          <tr key={g.id} className="hover:bg-emerald-500/5 transition-colors">
-                            <td className="py-3.5 px-4 font-semibold text-emerald-400">{g.subject}</td>
-                            <td className="py-3 px-4 font-mono font-bold">{g.q1 || '-'}</td>
-                            <td className="py-3 px-4 font-mono font-bold">{g.q2 || '-'}</td>
-                            <td className="py-3 px-4 font-mono font-bold">{g.exam || '-'}</td>
-                            <td className="py-3 px-4 font-mono font-bold text-amber-400">{avg}</td>
-                            <td className="py-3 px-4 theme-text-secondary text-xs">{g.notes || '—'}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB 2: ATTENDANCE HISTORY */}
-          {activeTab === 'attendance' && (
-            <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-base font-serif font-bold">Attendance Log</h2>
-                <span className="text-xs theme-text-secondary font-mono">Total Recorded: {attendanceRecords.length} Days</span>
-              </div>
-
-              {attendanceRecords.length === 0 ? (
-                <div className="p-12 text-center text-xs font-mono theme-text-secondary">
-                  No attendance entries recorded for this student yet.
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b theme-border theme-text-secondary text-[11px] font-mono uppercase">
-                        <th className="py-3 px-4">Date</th>
-                        <th className="py-3 px-4">Class</th>
-                        <th className="py-3 px-4">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y theme-border">
-                      {attendanceRecords.map((att) => {
-                        let statusBadge = null;
-                        if (att.status === 'present') {
-                          statusBadge = (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 font-mono text-[11px]">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Present
-                            </span>
-                          );
-                        } else if (att.status === 'absent') {
-                          statusBadge = (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 text-rose-400 font-mono text-[11px]">
-                              <XCircle className="w-3.5 h-3.5" /> Absent
-                            </span>
-                          );
-                        } else if (att.status === 'late') {
-                          statusBadge = (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 font-mono text-[11px]">
-                              <Clock className="w-3.5 h-3.5" /> Late
-                            </span>
-                          );
-                        } else {
-                          statusBadge = (
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 font-mono text-[11px]">
-                              <ShieldCheck className="w-3.5 h-3.5" /> Excused
-                            </span>
-                          );
-                        }
-
-                        return (
-                          <tr key={att.id} className="hover:bg-emerald-500/5 transition-colors">
-                            <td className="py-3.5 px-4 font-mono font-bold">{att.date}</td>
-                            <td className="py-3 px-4 font-mono theme-text-secondary">{att.class_name}</td>
-                            <td className="py-3 px-4">{statusBadge}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
     </div>
   );
 }

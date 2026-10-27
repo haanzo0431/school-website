@@ -602,7 +602,8 @@ export default function AdminClassManagementPage() {
                                 )}
                               </p>
                               <p className="text-[10px] theme-text-secondary font-mono">
-                                {student.email || 'No email'} | Password: <span className="text-emerald-400">{student.password || 'student123'}</span>
+                                {student.email || 'No email'}
+                                
                               </p>
                             </div>
                           </div>

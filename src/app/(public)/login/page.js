@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/app/supabase';
-import { UserCheck, GraduationCap, Users, ShieldAlert, KeyRound, ArrowLeft } from 'lucide-react';
+import { UserCheck, GraduationCap, Users, ShieldAlert, KeyRound, Eye, EyeOff } from 'lucide-react';
 
 const ROLE_LABELS = {
   student: 'Student',
@@ -19,6 +19,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const rolePrefixes = {
     student: 'S-',
@@ -83,14 +84,9 @@ export default function LoginPage() {
     <div className="flex items-center justify-center min-h-[calc(100vh-180px)] px-6 py-12 selection:bg-emerald-500 selection:text-black">
       <div className="w-full max-w-md theme-bg-card border theme-border rounded-3xl p-8 shadow-xl">
         
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 text-xs font-semibold theme-text-secondary hover:theme-text-primary transition-colors mb-6"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Home
-        </Link>
 
-        <div className="text-center mb-8">
+
+        <div className="text-center mb-8 pt-2"> 
           <h1 className="text-2xl font-serif font-bold mb-2 theme-text-primary">Sign In</h1>
           <p className="text-xs theme-text-secondary">Select your account type to continue</p>
         </div>
@@ -161,13 +157,21 @@ export default function LoginPage() {
             <div className="relative flex items-center">
               <KeyRound className="absolute left-4 w-4 h-4 theme-text-secondary" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 rounded-xl theme-bg-page border theme-border theme-text-primary text-xs focus:outline-none focus:border-emerald-500 font-mono"
+                className="w-full pl-10 pr-12 py-3 rounded-xl theme-bg-page border theme-border theme-text-primary text-xs focus:outline-none focus:border-emerald-500 font-mono"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-4 theme-text-secondary hover:theme-text-primary transition-colors cursor-pointer"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
           </div>
 
