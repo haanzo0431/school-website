@@ -70,8 +70,8 @@ export default function LoginPage() {
       .eq('id', authData.user.id)
       .single();
 
-    // 4. Smart Redirect
-    const isAdmin = profile?.role === 'admin' || formattedEmail === 'admin@xonqa.school' || formattedEmail.startsWith('a-');
+    // 4. Authoritative Redirect based strictly on database profile.role
+    const isAdmin = profile?.role === 'admin';
 
     if (isAdmin) {
       router.push('/admin/classes');

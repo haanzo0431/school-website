@@ -1,23 +1,25 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
   Users, Plus, Search, CheckCircle2, 
   XCircle, Send, Loader2, FileText, Check, X, User
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 export default function ClubsPage() {
-  const [user, setUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-  const [activeRole, setActiveRole] = useState('student'); // Controls sub-view for teachers/admins
+  const { user, profile: userProfile, loading: userLoading } = useUser();
+  const isTeacherOrAdmin = userProfile?.role === 'teacher' || userProfile?.role === 'admin';
+  const [roleOverride, setRoleOverride] = useState(null);
+  const activeRole = roleOverride || (isTeacherOrAdmin ? 'teacher' : 'student');
+  const setActiveRole = setRoleOverride;
+  const profileLoading = userLoading;
   
   const [clubs, setClubs] = useState([]);
   const [applications, setApplications] = useState([]);
   
   // Selection states
-  const [selectedStudentId, setSelectedStudentId] = useState('');
-  const [selectedTeacherId, setSelectedTeacherId] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -27,7 +29,6 @@ export default function ClubsPage() {
   const [applicationText, setApplicationText] = useState('');
 
   const [loading, setLoading] = useState(true);
-  const [profileLoading, setProfileLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
 
@@ -40,62 +41,21 @@ export default function ClubsPage() {
     room: 'Lab 101',
   });
 
-  // Load user profile and set initial view role
-  useEffect(() => {
-    async function loadUserProfile() {
-      setProfileLoading(true);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUser(user);
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single();
-
-        if (profile) {
-          setUserProfile(profile);
-          if (profile.role === 'teacher' || profile.role === 'admin') {
-            setActiveRole('teacher');
-            setSelectedTeacherId(profile.id);
-          } else {
-            setActiveRole('student');
-            setSelectedStudentId(profile.id);
-          }
-        }
-      }
-      setProfileLoading(false);
-    }
-    loadUserProfile();
-  }, []);
-
-  // Refetch clubs/apps when view or profile changes
-  useEffect(() => {
-    if (!profileLoading) {
-      fetchClubsAndApps();
-    }
-  }, [profileLoading, activeRole, userProfile]);
-
-  const fetchClubsAndApps = async () => {
-    setLoading(true);
+  const fetchClubsAndApps = useCallback(async () => {
     try {
-      const { data: clubsData, error: clubsErr } = await supabase
-        .from('clubs')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // Parallelize queries using Promise.all
+      const [
+        { data: clubsData, error: clubsErr },
+        { data: appsData, error: appsErr },
+        { data: profilesData }
+      ] = await Promise.all([
+        supabase.from('clubs').select('*').order('created_at', { ascending: false }),
+        supabase.from('club_applications').select('*').order('created_at', { ascending: false }),
+        supabase.from('profiles').select('id, name, surname, email'),
+      ]);
 
       if (clubsErr) throw clubsErr;
-
-      const { data: appsData, error: appsErr } = await supabase
-        .from('club_applications')
-        .select('*')
-        .order('created_at', { ascending: false });
-
       if (appsErr) throw appsErr;
-
-      const { data: profilesData } = await supabase
-        .from('profiles')
-        .select('id, name, surname, email');
 
       const profilesMap = new Map((profilesData || []).map((p) => [p.id, p]));
       const clubsMap = new Map((clubsData || []).map((c) => [c.id, c]));
@@ -118,12 +78,30 @@ export default function ClubsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  // Create new club (Teacher Action)
+  // Refetch clubs/apps when view or profile changes
+  useEffect(() => {
+    if (profileLoading) return;
+    let isMounted = true;
+    (async () => {
+      if (isMounted) {
+        await fetchClubsAndApps();
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, [profileLoading, activeRole, userProfile, fetchClubsAndApps]);
+
+  // Create new club (Teacher/Admin Action - authenticated user is advisor)
   const handleCreateClub = async (e) => {
     e.preventDefault();
-    if (!newClub.title || !newClub.description || !selectedTeacherId) return;
+    if (!user || (userProfile?.role !== 'teacher' && userProfile?.role !== 'admin')) {
+      showToast('error', 'Only teachers or administrators can create clubs.');
+      return;
+    }
+    if (!newClub.title || !newClub.description) return;
 
     setSubmitting(true);
     try {
@@ -134,7 +112,7 @@ export default function ClubsPage() {
           description: newClub.description,
           schedule: newClub.schedule,
           room: newClub.room,
-          advisor_id: selectedTeacherId,
+          advisor_id: user.id, // Strictly authenticated user's ID
         },
       ]);
 
@@ -157,10 +135,14 @@ export default function ClubsPage() {
     }
   };
 
-  // Submit join application (Student Action)
+  // Submit join application (Student Action - strictly authenticated student's ID)
   const handleApplyToClub = async (e) => {
     e.preventDefault();
-    if (!applicationText || !applyingClub || !selectedStudentId) return;
+    if (!user) {
+      showToast('error', 'Please log in to apply.');
+      return;
+    }
+    if (!applicationText || !applyingClub) return;
 
     setSubmitting(true);
     try {
@@ -168,7 +150,7 @@ export default function ClubsPage() {
         [
           {
             club_id: applyingClub.id,
-            student_id: selectedStudentId,
+            student_id: user.id, // Strictly authenticated student's ID
             answers: applicationText,
             status: 'pending',
           },
@@ -189,8 +171,15 @@ export default function ClubsPage() {
     }
   };
 
-  // Update application status (Teacher Action)
+  // Update application status (Teacher Action - only for clubs they advise, unless admin)
   const handleUpdateAppStatus = async (appId, status) => {
+    const targetApp = applications.find((a) => a.id === appId);
+    const canManage = userProfile?.role === 'admin' || (targetApp && targetApp.clubs?.advisor_id === userProfile?.id);
+    if (!canManage) {
+      showToast('error', 'You can only review applications for clubs you advise.');
+      return;
+    }
+
     try {
       const { error } = await supabase
         .from('club_applications')
@@ -218,8 +207,10 @@ export default function ClubsPage() {
     return matchesCategory && matchesSearch;
   });
 
-  const isTeacherOrAdmin = userProfile?.role === 'teacher' || userProfile?.role === 'admin';
-  const studentApplications = applications.filter((a) => a.student_id === selectedStudentId);
+  const studentApplications = applications.filter((a) => a.student_id === user?.id);
+  const reviewableApplications = applications.filter((a) =>
+    userProfile?.role === 'admin' || a.clubs?.advisor_id === userProfile?.id
+  );
 
   if (profileLoading) {
     return (
@@ -301,9 +292,9 @@ export default function ClubsPage() {
             <span className="text-xs font-mono theme-text-secondary">Submissions</span>
           </div>
 
-          {applications.length === 0 ? (
+          {reviewableApplications.length === 0 ? (
             <p className="text-xs font-mono theme-text-secondary py-6 text-center">
-              No student applications submitted yet.
+              No student applications submitted yet for your clubs.
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -318,7 +309,7 @@ export default function ClubsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y theme-border">
-                  {applications.map((app) => {
+                  {reviewableApplications.map((app) => {
                     const studentName = app.profiles
                       ? `${app.profiles.name || ''} ${app.profiles.surname || ''}`.trim()
                       : 'Student';

@@ -6,6 +6,7 @@ import {
   CheckCircle2, AlertCircle, CalendarDays,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 const CLASS_OPTIONS = ['10-A'];
 const DAY_NAMES = {
@@ -15,10 +16,9 @@ const DAY_NAMES = {
 const today = () => new Date().toISOString().slice(0, 10);
 
 export default function TeacherClassesPage() {
+  const { user, profile, role, loading: userLoading } = useUser();
   const [selectedClass, setSelectedClass] = useState(CLASS_OPTIONS[0]);
   const [lessonDate, setLessonDate] = useState(today());
-  const [teacherId, setTeacherId] = useState(null);
-  const [subject, setSubject] = useState('');
   const [schedule, setSchedule] = useState([]);
   const [students, setStudents] = useState([]);
   const [points, setPoints] = useState({});
@@ -28,26 +28,25 @@ export default function TeacherClassesPage() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
 
+  const isTeacherOrAdmin = role === 'teacher' || role === 'admin';
+  const teacherId = user?.id;
+  const subject = profile?.subject || '';
+
   useEffect(() => {
-    async function loadTeacher() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setTeacherId(user.id);
+    if (userLoading || !user || !isTeacherOrAdmin) return;
 
-      const { data: me } = await supabase
-        .from('profiles').select('subject').eq('id', user.id).maybeSingle();
-      setSubject(me?.subject || '');
-
+    async function loadSchedule() {
       const { data: sched } = await supabase
         .from('schedule').select('*')
         .eq('teacher_id', user.id)
         .order('weekday').order('lesson_no');
       setSchedule(sched || []);
     }
-    loadTeacher();
-  }, []);
+    loadSchedule();
+  }, [user, userLoading, isTeacherOrAdmin]);
 
   useEffect(() => {
+    if (!isTeacherOrAdmin) return;
     async function loadStudents() {
       setLoading(true);
       const { data } = await supabase
@@ -66,18 +65,20 @@ export default function TeacherClassesPage() {
       setLoading(false);
     }
     loadStudents();
-  }, [selectedClass]);
+  }, [selectedClass, isTeacherOrAdmin]);
 
   useEffect(() => {
-    if (!teacherId || students.length === 0) return;
+    if (!teacherId || students.length === 0 || !isTeacherOrAdmin) return;
     async function loadScores() {
-      const { data: fs } = await supabase
-        .from('formative_scores').select('student_id, teacher_points')
-        .eq('teacher_id', teacherId).eq('lesson_date', lessonDate);
-
-      const { data: fv } = await supabase
-        .from('formative_view').select('student_id, classwork_points')
-        .eq('teacher_id', teacherId).eq('lesson_date', lessonDate);
+      // Parallelize formative_scores and formative_view with Promise.all
+      const [{ data: fs }, { data: fv }] = await Promise.all([
+        supabase
+          .from('formative_scores').select('student_id, teacher_points')
+          .eq('teacher_id', teacherId).eq('lesson_date', lessonDate),
+        supabase
+          .from('formative_view').select('student_id, classwork_points')
+          .eq('teacher_id', teacherId).eq('lesson_date', lessonDate),
+      ]);
 
       const p = {};
       const c = {};
@@ -91,9 +92,14 @@ export default function TeacherClassesPage() {
       setClasswork(c);
     }
     loadScores();
-  }, [teacherId, students, lessonDate]);
+  }, [teacherId, students, lessonDate, isTeacherOrAdmin]);
 
   const handleSave = async () => {
+    if (!isTeacherOrAdmin) {
+      setToast({ type: 'error', text: 'Faqat o\'qituvchilar baho qo\'yishi mumkin.' });
+      return;
+    }
+
     setSaving(true);
     setToast(null);
     const rows = students.map((s) => ({
@@ -115,6 +121,20 @@ export default function TeacherClassesPage() {
     setSaving(false);
     setTimeout(() => setToast(null), 4000);
   };
+
+  if (!userLoading && !isTeacherOrAdmin) {
+    return (
+      <div className="max-w-6xl mx-auto px-6 py-20 text-center space-y-4">
+        <div className="inline-flex p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h1 className="text-2xl font-serif font-bold">Ruxsat berilmagan</h1>
+        <p className="text-xs theme-text-secondary max-w-md mx-auto">
+          Sinflar va jurnallarni boshqarish faqat o&apos;qituvchilar va maktab ma&apos;muriyati uchun mo&apos;ljallangan.
+        </p>
+      </div>
+    );
+  }
 
   const filtered = students.filter((s) =>
     s.name.toLowerCase().includes(search.toLowerCase())

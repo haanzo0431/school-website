@@ -1,7 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { UserPlus, CheckCircle2, AlertCircle, ShieldAlert, Key, User, BookOpen, Users } from 'lucide-react';
+import { UserPlus, CheckCircle2, AlertCircle, ShieldAlert, Key, User, BookOpen, Users, RefreshCw } from 'lucide-react';
+import { supabase } from '@/app/supabase';
+
+function generateSecurePassword(prefix = 'User') {
+  const cleanPrefix = prefix.replace(/[^a-zA-Z]/g, '') || 'User';
+  const cap = cleanPrefix.charAt(0).toUpperCase() + cleanPrefix.slice(1).toLowerCase();
+  const digits = Math.floor(1000 + Math.random() * 9000);
+  const symbols = '!@#$%*';
+  const sym = symbols[Math.floor(Math.random() * symbols.length)];
+  return `${cap}${digits}${sym}`;
+}
 
 const EMPTY_FORM = {
   firstName: '',
@@ -14,16 +24,16 @@ const EMPTY_FORM = {
   parentId: '',
 };
 
-// Ommaviy yaratish ro'yxati
+// Ommaviy yaratish ro'yxati (parollar endi kodda ochiq saqlanmaydi, on-demand generatsiya qilinadi)
 const BULK_CLASS = '10-A';
 const BULK_STUDENTS = [
-  { firstName: 'Muhiddin', surname: 'Jumanazarov', password: 'Muhiddin4827' },
-  { firstName: 'Azizbek', surname: 'Baxtiyorov', password: 'Azizbek5139' },
-  { firstName: 'Ibrohim', surname: 'Ilhomov', password: 'Ibrohim7264' },
-  { firstName: 'Jahongir', surname: 'Egamberdiyev', password: 'Jahongir8416' },
-  { firstName: 'Elbek', surname: 'Davletov', password: 'Elbek2953' },
-  { firstName: 'Bunyot', surname: 'Ismoilov', password: 'Bunyot6071' },
-  { firstName: 'Aminboy', surname: 'Allaquliyev', password: 'Aminboy9348' },
+  { firstName: 'Muhiddin', surname: 'Jumanazarov' },
+  { firstName: 'Azizbek', surname: 'Baxtiyorov' },
+  { firstName: 'Ibrohim', surname: 'Ilhomov' },
+  { firstName: 'Jahongir', surname: 'Egamberdiyev' },
+  { firstName: 'Elbek', surname: 'Davletov' },
+  { firstName: 'Bunyot', surname: 'Ismoilov' },
+  { firstName: 'Aminboy', surname: 'Allaquliyev' },
 ];
 const STUDENT_LOGINS = [
   'jumanazarov_muhiddin', 'baxtiyorov_azizbek', 'ilhomov_ibrohim',
@@ -31,26 +41,26 @@ const STUDENT_LOGINS = [
 ];
 
 const TEACHERS = [
-  { loginId: 'matematika', subject: 'Matematika', password: 'Matematika4821' },
-  { loginId: 'fizika', subject: 'Fizika', password: 'Fizika5937' },
-  { loginId: 'onatili', subject: 'Ona tili', password: 'OnaTili6143' },
-  { loginId: 'tarix', subject: 'Tarix', password: 'Tarix7259' },
-  { loginId: 'informatika', subject: 'Informatika', password: 'Informatika8364' },
-  { loginId: 'inglizTili', subject: 'Ingliz tili', password: 'Ingliz9472' },
-  { loginId: 'chqbt', subject: 'CHQBT', password: 'Chqbt3586' },
-  { loginId: 'jismoniy', subject: 'Jismoniy tarbiya', password: 'Jismoniy2695' },
-  { loginId: 'tarbiya', subject: 'Tarbiya', password: 'Tarbiya4718' },
-  { loginId: 'rustili', subject: 'Rus tili', password: 'RusTili5829' },
+  { loginId: 'matematika', subject: 'Matematika' },
+  { loginId: 'fizika', subject: 'Fizika' },
+  { loginId: 'onatili', subject: 'Ona tili' },
+  { loginId: 'tarix', subject: 'Tarix' },
+  { loginId: 'informatika', subject: 'Informatika' },
+  { loginId: 'inglizTili', subject: 'Ingliz tili' },
+  { loginId: 'chqbt', subject: 'CHQBT' },
+  { loginId: 'jismoniy', subject: 'Jismoniy tarbiya' },
+  { loginId: 'tarbiya', subject: 'Tarbiya' },
+  { loginId: 'rustili', subject: 'Rus tili' },
 ];
 
 const PARENTS = [
-  { child: 'jumanazarov_muhiddin', first: 'Muhiddin', last: 'Jumanazarov', password: 'ParentMuhiddin3517' },
-  { child: 'baxtiyorov_azizbek', first: 'Azizbek', last: 'Baxtiyorov', password: 'ParentAzizbek4628' },
-  { child: 'ilhomov_ibrohim', first: 'Ibrohim', last: 'Ilhomov', password: 'ParentIbrohim5739' },
-  { child: 'egamberdiyev_jahongir', first: 'Jahongir', last: 'Egamberdiyev', password: 'ParentJahongir6841' },
-  { child: 'davletov_elbek', first: 'Elbek', last: 'Davletov', password: 'ParentElbek7952' },
-  { child: 'ismoilov_bunyot', first: 'Bunyot', last: 'Ismoilov', password: 'ParentBunyot8163' },
-  { child: 'allaquliyev_aminboy', first: 'Aminboy', last: 'Allaquliyev', password: 'ParentAminboy9274' },
+  { child: 'jumanazarov_muhiddin', first: 'Muhiddin', last: 'Jumanazarov' },
+  { child: 'baxtiyorov_azizbek', first: 'Azizbek', last: 'Baxtiyorov' },
+  { child: 'ilhomov_ibrohim', first: 'Ibrohim', last: 'Ilhomov' },
+  { child: 'egamberdiyev_jahongir', first: 'Jahongir', last: 'Egamberdiyev' },
+  { child: 'davletov_elbek', first: 'Elbek', last: 'Davletov' },
+  { child: 'ismoilov_bunyot', first: 'Bunyot', last: 'Ismoilov' },
+  { child: 'allaquliyev_aminboy', first: 'Aminboy', last: 'Allaquliyev' },
 ];
 
 const inputBase =
@@ -63,14 +73,23 @@ export default function AdminPage() {
   const [message, setMessage] = useState(null);
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkResults, setBulkResults] = useState([]);
-    const [staffRunning, setStaffRunning] = useState(false);
+  const [staffRunning, setStaffRunning] = useState(false);
   const [staffResults, setStaffResults] = useState([]);
+
+  const getAuthHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return {
+      'Content-Type': 'application/json',
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    };
+  };
 
   const callStaff = async (body, label) => {
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch('/api/admin/create-staff', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
       });
       const data = await res.json();
@@ -85,15 +104,17 @@ export default function AdminPage() {
     setStaffRunning(true);
     setStaffResults([]);
     for (const t of TEACHERS) {
+      const password = generateSecurePassword(t.subject);
       await callStaff({
-        kind: 'teacher', loginId: t.loginId, password: t.password,
+        kind: 'teacher', loginId: t.loginId, password,
         firstName: t.subject, surname: "o'qituvchisi",
         subject: t.subject, gradeClass: '10-A', students: STUDENT_LOGINS,
       }, `Ustoz ${t.subject}`);
     }
     for (const p of PARENTS) {
+      const password = generateSecurePassword(`Parent${p.first}`);
       await callStaff({
-        kind: 'parent', loginId: `${p.last}_${p.first}`.toLowerCase(), password: p.password,
+        kind: 'parent', loginId: `${p.last}_${p.first}`.toLowerCase(), password,
         firstName: 'Ota-ona', surname: p.last, childLogin: p.child,
       }, `Ota-ona ${p.last} ${p.first}`);
     }
@@ -104,22 +125,30 @@ export default function AdminPage() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
+  const handleGenerateFormPassword = () => {
+    const pwd = generateSecurePassword(formData.firstName || 'Student');
+    setFormData((prev) => ({ ...prev, password: pwd }));
+  };
+
   const handleCreateStudent = async (e) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
 
     try {
+      const headers = await getAuthHeaders();
+      const finalPassword = formData.password.trim() || generateSecurePassword(formData.firstName || 'Student');
+
       const res = await fetch('/api/admin/create-user', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        headers,
+        body: JSON.stringify({ ...formData, password: finalPassword }),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to create student.');
 
-      setMessage({ type: 'success', text: `Account created! Login ID: ${data.user.email}` });
+      setMessage({ type: 'success', text: `Account created! Login ID: ${data.user.email} | Parol: ${finalPassword}` });
       setFormData(EMPTY_FORM);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -133,27 +162,30 @@ export default function AdminPage() {
     setBulkRunning(true);
     setBulkResults([]);
 
+    const headers = await getAuthHeaders();
+
     for (const s of BULK_STUDENTS) {
       const loginId = `${s.surname}_${s.firstName}`.toLowerCase();
+      const password = generateSecurePassword(s.firstName);
       let result;
       try {
         const res = await fetch('/api/admin/create-user', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             firstName: s.firstName,
             surname: s.surname,
             gradeClass: BULK_CLASS,
             age: '',
             studentId: loginId,
-            password: s.password,
+            password: password,
             teacherId: '',
             parentId: '',
           }),
         });
         const data = await res.json();
         result = res.ok
-          ? { ok: true, text: `${s.surname} ${s.firstName}: ${loginId} / ${s.password}` }
+          ? { ok: true, text: `${s.surname} ${s.firstName}: ${loginId} / ${password}` }
           : { ok: false, text: `${s.surname} ${s.firstName}: ${data.error}` };
       } catch (err) {
         result = { ok: false, text: `${s.surname} ${s.firstName}: ${err.message}` };
@@ -211,7 +243,8 @@ export default function AdminPage() {
           </div>
         )}
       </div>
-            <div className="theme-bg-card border theme-border p-6 rounded-3xl space-y-4">
+
+      <div className="theme-bg-card border theme-border p-6 rounded-3xl space-y-4">
         <h2 className="font-serif font-bold text-lg">Ustozlar (10) va ota-onalar (7)</h2>
         <p className="text-xs theme-text-secondary">
           Avval o'quvchilar yaratilgan bo'lishi kerak. Har bir ustoz 7 o'quvchiga ulanadi, har bir ota-ona o'z farzandiga.
@@ -249,14 +282,15 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Bitta o'quvchi formasi */}
-      <form onSubmit={handleCreateStudent} className="theme-bg-card border theme-border p-6 md:p-8 rounded-3xl space-y-6">
-        <div className="grid md:grid-cols-2 gap-6">
+      {/* Yakka o'quvchi yaratish formasi */}
+      <form onSubmit={handleCreateStudent} className="theme-bg-card border theme-border p-6 rounded-3xl space-y-6">
+        <h2 className="font-serif font-bold text-lg">Yakka o'quvchi yaratish</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className={labelBase}>First Name</label>
             <div className="relative">
               <User className="w-4 h-4 absolute left-3.5 top-3 theme-text-secondary" />
-              <input type="text" name="firstName" required placeholder="Jasur"
+              <input type="text" name="firstName" required placeholder="Ali"
                 value={formData.firstName} onChange={handleChange}
                 className={`${inputBase} pl-10`} />
             </div>
@@ -264,8 +298,12 @@ export default function AdminPage() {
 
           <div>
             <label className={labelBase}>Surname</label>
-            <input type="text" name="surname" required placeholder="Rahimov"
-              value={formData.surname} onChange={handleChange} className={inputBase} />
+            <div className="relative">
+              <User className="w-4 h-4 absolute left-3.5 top-3 theme-text-secondary" />
+              <input type="text" name="surname" required placeholder="Valiyev"
+                value={formData.surname} onChange={handleChange}
+                className={`${inputBase} pl-10`} />
+            </div>
           </div>
 
           <div>
@@ -295,10 +333,19 @@ export default function AdminPage() {
           </div>
 
           <div>
-            <label className={labelBase}>Initial Password</label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-mono font-bold uppercase theme-text-secondary">Initial Password</label>
+              <button
+                type="button"
+                onClick={handleGenerateFormPassword}
+                className="text-[10px] font-mono text-emerald-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className="w-3 h-3" /> Auto-generate
+              </button>
+            </div>
             <div className="relative">
               <Key className="w-4 h-4 absolute left-3.5 top-3 theme-text-secondary" />
-              <input type="text" name="password" required placeholder="student123"
+              <input type="text" name="password" required placeholder="Click Auto-generate or enter password"
                 value={formData.password} onChange={handleChange}
                 className={`${inputBase} pl-10 font-mono`} />
             </div>

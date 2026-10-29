@@ -3,26 +3,30 @@
 import { useState, useEffect } from 'react';
 import { BookOpen, User, Clock, Building, Loader2 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 const DAYS = { 1: 'Dushanba', 2: 'Seshanba', 3: 'Chorshanba', 4: 'Payshanba', 5: 'Juma', 6: 'Shanba' };
 
 export default function StudentSubjectsPage() {
-  const [cls, setCls] = useState('');
+  const { user, profile, loading: userLoading } = useUser();
   const [subjects, setSubjects] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  const cls = profile?.class || profile?.class_name || '10-A';
 
   useEffect(() => {
+    if (!user) return;
+
+    let isMounted = true;
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const { data: me } = await supabase.from('profiles').select('class, class_name').eq('id', user.id).maybeSingle();
-      const className = me?.class || me?.class_name || '10-A';
-      setCls(className);
+      const className = profile?.class || profile?.class_name || '10-A';
 
       const { data: sched } = await supabase.from('schedule').select('*')
         .eq('class_name', className).order('weekday').order('lesson_no');
       const ids = [...new Set((sched || []).map((s) => s.teacher_id))];
-      const { data: teachers } = await supabase.from('profiles').select('id, subject').in('id', ids);
+      const { data: teachers } = ids.length > 0
+        ? await supabase.from('profiles').select('id, subject').in('id', ids)
+        : { data: [] };
 
       const map = {};
       (sched || []).forEach((s) => {
@@ -32,11 +36,16 @@ export default function StudentSubjectsPage() {
         map[name].slots.push(s);
         if (s.room) map[name].rooms.add(s.room);
       });
-      setSubjects(Object.values(map));
-      setLoading(false);
+      if (isMounted) {
+        setSubjects(Object.values(map));
+        setDataLoading(false);
+      }
     }
     load();
-  }, []);
+    return () => { isMounted = false; };
+  }, [user, profile]);
+
+  const loading = userLoading || (user ? dataLoading : false);
 
   if (loading) {
     return (

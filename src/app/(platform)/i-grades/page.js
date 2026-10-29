@@ -3,25 +3,32 @@
 import { useState, useEffect } from 'react';
 import { Award, BookOpen, Loader2 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 export default function StudentGradebookPage() {
+  const { user, loading: userLoading } = useUser();
   const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
 
   useEffect(() => {
+    if (!user) return;
+
+    let isMounted = true;
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
-          .from('formative_view').select('*')
-          .eq('student_id', user.id)
-          .order('lesson_date', { ascending: false });
+      const { data } = await supabase
+        .from('formative_view').select('*')
+        .eq('student_id', user.id)
+        .order('lesson_date', { ascending: false });
+      if (isMounted) {
         setRows(data || []);
+        setDataLoading(false);
       }
-      setLoading(false);
     }
     load();
-  }, []);
+    return () => { isMounted = false; };
+  }, [user]);
+
+  const loading = userLoading || (user ? dataLoading : false);
 
   const bySubject = {};
   rows.forEach((r) => {

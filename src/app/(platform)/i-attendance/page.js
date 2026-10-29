@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { supabase } from '@/app/supabase'; // Adjust this path if your Supabase client is elsewhere
+import { useState, useEffect, useCallback } from 'react';
+import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 import {
   Calendar,
   Users,
@@ -23,6 +24,7 @@ const STATUS_OPTIONS = [
 ];
 
 export default function AttendancePage() {
+  const { user, profile, role, loading: userLoading } = useUser();
   const [selectedClass, setSelectedClass] = useState('10-A');
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().split('T')[0]
@@ -35,32 +37,36 @@ export default function AttendancePage() {
   const [saving, setSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
 
-  // Load students and existing attendance when class or date changes
-  useEffect(() => {
-    fetchData();
-  }, [selectedClass, selectedDate]);
+  const isTeacherOrAdmin = role === 'teacher' || role === 'admin';
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Fetch all student profiles
+      // 1. Fetch ONLY student profiles strictly in the selected class
       const { data: studentList, error: studentError } = await supabase
         .from('profiles')
         .select('id, name, surname, email')
-        .eq('role', 'student');
+        .eq('role', 'student')
+        .or(`class.eq.${selectedClass},class_name.eq.${selectedClass}`);
 
       if (studentError) throw studentError;
 
       setStudents(studentList || []);
 
-      // 2. Fetch attendance entries for selected date
-      const { data: attendanceRecords, error: attendanceError } = await supabase
-        .from('attendance')
-        .select('student_id, status')
-        .eq('date', selectedDate)
-        .eq('class_name', selectedClass);
+      // 2. Fetch attendance entries strictly for selected date and active class students
+      const studentIds = (studentList || []).map((s) => s.id);
+      let attendanceRecords = [];
 
-      if (attendanceError) throw attendanceError;
+      if (studentIds.length > 0) {
+        const { data, error: attendanceError } = await supabase
+          .from('attendance')
+          .select('student_id, status')
+          .eq('date', selectedDate)
+          .in('student_id', studentIds);
+
+        if (attendanceError) throw attendanceError;
+        attendanceRecords = data || [];
+      }
 
       // Map DB records into state object
       const initialAttendance = {};
@@ -68,7 +74,7 @@ export default function AttendancePage() {
         initialAttendance[record.student_id] = record.status;
       });
 
-      // Default unrecorded students to 'present'
+      // Default unrecorded students in this class to 'present'
       (studentList || []).forEach((student) => {
         if (!initialAttendance[student.id]) {
           initialAttendance[student.id] = 'present';
@@ -81,7 +87,17 @@ export default function AttendancePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedClass, selectedDate]);
+
+  // Load students and existing attendance when class or date changes
+  useEffect(() => {
+    if (userLoading || !isTeacherOrAdmin) return;
+    let isMounted = true;
+    (async () => {
+      if (isMounted) await fetchData();
+    })();
+    return () => { isMounted = false; };
+  }, [userLoading, isTeacherOrAdmin, fetchData]);
 
   // Toggle status for a single student
   const handleStatusChange = (studentId, status) => {
@@ -102,9 +118,15 @@ export default function AttendancePage() {
 
   // Save or update attendance records in Supabase
   const handleSave = async () => {
+    if (!isTeacherOrAdmin) {
+      setToastMessage({ type: 'error', text: 'Faqat o\'qituvchilar davomatni saqlashi mumkin.' });
+      return;
+    }
+
     setSaving(true);
     setToastMessage(null);
 
+    // Only students of the active class are included
     const payload = students.map((student) => ({
       student_id: student.id,
       class_name: selectedClass,
@@ -130,6 +152,20 @@ export default function AttendancePage() {
       setTimeout(() => setToastMessage(null), 3000);
     }
   };
+
+  if (!userLoading && !isTeacherOrAdmin) {
+    return (
+      <div className="max-w-6xl mx-auto px-6 py-20 text-center space-y-4">
+        <div className="inline-flex p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h1 className="text-2xl font-serif font-bold">Ruxsat berilmagan</h1>
+        <p className="text-xs theme-text-secondary max-w-md mx-auto">
+          Davomat tizimi faqat o&apos;qituvchilar va maktab ma&apos;muriyati uchun mo&apos;ljallangan.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">

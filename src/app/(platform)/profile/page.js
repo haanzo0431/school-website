@@ -9,16 +9,18 @@ import {
   ShieldLock, Camera, Loader2, AlertCircle, GraduationCap, Calendar
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 export default function ProfilePage() {
   const router = useRouter();
   const fileInputRef = useRef(null);
+  const { user, profile, role: contextRole, loading: userLoading, refreshUser } = useUser();
 
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [message, setMessage] = useState('');
   const [avatarError, setAvatarError] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
   
   // Feedback state
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
@@ -27,18 +29,25 @@ export default function ProfilePage() {
   const [contactInfo, setContactInfo] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState('');
 
-  // Form & Profile State
-  const [userId, setUserId] = useState(null);
-  const [role, setRole] = useState('student');
-  const [avatarUrl, setAvatarUrl] = useState('');
-  const [formData, setFormData] = useState({
-    first_name: '',
-    surname: '',
-    class: '',
-    age: '',
-    theme: 'dark',
-    language: 'uz',
+  // Preferences
+  const [theme, setTheme] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('app-theme') || 'dark';
+    }
+    return 'dark';
   });
+  const [language, setLanguage] = useState('uz');
+
+  // Authoritative identity values derived from profile
+  const userId = user?.id;
+  const role = contextRole || profile?.role || 'student';
+  const firstName = profile?.first_name || profile?.name || '';
+  const surname = profile?.surname || '';
+  const userClass = profile?.class || profile?.grade || '';
+  const age = profile?.age ? String(profile.age) : '';
+  const currentAvatar = avatarUrl || profile?.avatar_url || profile?.photo_url || '';
+  const initialLetter = firstName ? firstName.charAt(0).toUpperCase() : 'S';
+  const fullName = [firstName, surname].filter(Boolean).join(' ') || 'Anonymous User';
 
   const applyTheme = (themeName) => {
     const validTheme = themeName || 'dark';
@@ -47,62 +56,19 @@ export default function ProfilePage() {
   };
 
   useEffect(() => {
-    async function loadProfile() {
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push('/');
-        return;
-      }
-
-      setUserId(user.id);
-      const emailPrefix = user.email ? user.email.split('@')[0].toLowerCase() : '';
-
-      const { data } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single();
-
-      const activeTheme = localStorage.getItem('app-theme') || data?.theme || 'dark';
-
-      if (data) {
-        setFormData({
-          first_name: data.first_name || data.name || '',
-          surname: data.surname || '',
-          class: data.class || data.grade || '',
-          age: data.age ? String(data.age) : '',
-          theme: activeTheme,
-          language: data.language || 'uz',
-        });
-        setAvatarUrl(data.avatar_url || '');
-      } else {
-        setFormData((prev) => ({ ...prev, theme: activeTheme }));
-      }
-
-      applyTheme(activeTheme);
-
-      // Role Detection
-      let computedRole = data?.role;
-      if (emailPrefix.startsWith('t-')) {
-        computedRole = 'teacher';
-      } else if (emailPrefix.startsWith('p-')) {
-        computedRole = 'parent';
-      } else if (emailPrefix.startsWith('s-')) {
-        computedRole = 'student';
-      } else if (!computedRole || computedRole === 'viewer') {
-        computedRole = 'student';
-      }
-
-      setRole(computedRole);
-      setLoading(false);
+    if (userLoading) return;
+    if (!user) {
+      router.push('/login');
+      return;
     }
-    loadProfile();
-  }, [router]);
+
+    const activeTheme = localStorage.getItem('app-theme') || profile?.theme || 'dark';
+    applyTheme(activeTheme);
+  }, [user, profile, userLoading, router]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    window.location.href = '/';
+    router.push('/login');
   };
 
   const handleAvatarUpload = async (e) => {
@@ -146,6 +112,7 @@ export default function ProfilePage() {
       if (updateError) throw updateError;
 
       setAvatarUrl(publicUrl);
+      await refreshUser();
       setMessage('Profile picture updated successfully!');
     } catch (err) {
       console.error('Avatar upload failed:', err);
@@ -157,13 +124,14 @@ export default function ProfilePage() {
   };
 
   const handleThemeSelect = async (newTheme) => {
-    setFormData((prev) => ({ ...prev, theme: newTheme }));
+    setTheme(newTheme);
     applyTheme(newTheme);
 
     if (userId) {
       await supabase
         .from('profiles')
         .upsert({ id: userId, theme: newTheme, updated_at: new Date().toISOString() });
+      await refreshUser();
     }
   };
 
@@ -177,14 +145,15 @@ export default function ProfilePage() {
         .from('profiles')
         .upsert({
           id: userId,
-          theme: formData.theme,
-          language: formData.language,
+          theme,
+          language,
           updated_at: new Date().toISOString(),
         });
 
       if (error) throw error;
 
-      applyTheme(formData.theme);
+      applyTheme(theme);
+      await refreshUser();
       setMessage('Preferences saved successfully!');
     } catch (err) {
       setMessage('Failed to save preferences: ' + err.message);
@@ -199,15 +168,13 @@ export default function ProfilePage() {
     setSubmittingFeedback(true);
 
     try {
-      const fullName = `${formData.first_name} ${formData.surname}`.trim() || 'Anonymous User';
-
       const { error: dbError } = await supabase.from('feedback').insert([
         {
           user_id: userId,
           full_name: fullName,
           role: role,
-          class: formData.class,
-          age: formData.age ? parseInt(formData.age, 10) : null,
+          class: userClass,
+          age: age ? parseInt(age, 10) : null,
           contact_info: contactInfo,
           feedback_type: feedbackType,
           message: feedbackMessage,
@@ -223,8 +190,8 @@ export default function ProfilePage() {
           isPlatform: true,
           fullName,
           role,
-          userClass: formData.class,
-          age: formData.age,
+          userClass,
+          age,
           contactInfo,
           category: feedbackType,
           message: feedbackMessage,
@@ -246,15 +213,13 @@ export default function ProfilePage() {
     }
   };
 
-  if (loading) {
+  if (userLoading) {
     return (
       <div className="p-10 flex items-center justify-center text-xs font-mono theme-text-secondary">
         Loading settings...
       </div>
     );
   }
-
-  const initialLetter = formData.first_name ? formData.first_name.charAt(0).toUpperCase() : 'S';
 
   return (
     <div className="theme-bg-page theme-text-primary p-6 md:p-10 max-w-4xl mx-auto space-y-8">
@@ -278,33 +243,20 @@ export default function ProfilePage() {
             href="/platform"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold theme-bg-card border theme-border hover:border-emerald-500/50 transition-colors"
           >
-            <LayoutDashboard className="w-3.5 h-3.5 text-emerald-500" /> Dashboard
+            <LayoutDashboard className="w-4 h-4 text-emerald-500" /> Dashboard
           </Link>
 
           <button
-            type="button"
             onClick={handleSignOut}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500 hover:text-white transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-colors cursor-pointer"
           >
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
+            <LogOut className="w-4 h-4" /> Sign Out
           </button>
         </div>
       </div>
 
-      {message && (
-        <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-2">
-          <Check className="w-4 h-4" /> {message}
-        </div>
-      )}
-
-      {avatarError && (
-        <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-semibold flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" /> {avatarError}
-        </div>
-      )}
-
-      {/* Profile Photo Section (Optional Upload) */}
-      <div className="p-6 theme-bg-card border theme-border rounded-3xl flex flex-col sm:flex-row items-center gap-6 shadow-sm">
+      {/* Profile Picture Card */}
+      <div className="p-6 md:p-8 theme-bg-card border theme-border rounded-3xl flex flex-col sm:flex-row items-center gap-6 shadow-sm">
         <input
           type="file"
           ref={fileInputRef}
@@ -314,9 +266,13 @@ export default function ProfilePage() {
         />
 
         <div className="relative group shrink-0">
-          <div className="w-24 h-24 rounded-2xl bg-emerald-500/15 border-2 border-emerald-500/30 overflow-hidden flex items-center justify-center text-emerald-400 text-3xl font-serif font-bold shadow-md">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+          <div className="w-24 h-24 rounded-2xl overflow-hidden theme-bg-page border-2 border-emerald-500/40 flex items-center justify-center text-3xl font-bold font-serif text-emerald-500 shadow-md">
+            {currentAvatar ? (
+              <img
+                src={currentAvatar}
+                alt="Profile Avatar"
+                className="w-full h-full object-cover"
+              />
             ) : (
               <span>{initialLetter}</span>
             )}
@@ -342,9 +298,7 @@ export default function ProfilePage() {
         <div className="space-y-1.5 text-center sm:text-left">
           <div className="flex items-center justify-center sm:justify-start gap-2">
             <h2 className="text-xl font-serif font-bold">
-              {formData.first_name || formData.surname
-                ? `${formData.first_name} ${formData.surname}`
-                : 'School Member'}
+              {fullName !== 'Anonymous User' ? fullName : 'School Member'}
             </h2>
             <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               {role}
@@ -383,7 +337,7 @@ export default function ProfilePage() {
             <div className="relative">
               <input
                 type="text"
-                value={formData.first_name || 'Not set'}
+                value={firstName || 'Not set'}
                 disabled
                 className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border opacity-70 cursor-not-allowed select-none font-semibold"
               />
@@ -396,7 +350,7 @@ export default function ProfilePage() {
             <div className="relative">
               <input
                 type="text"
-                value={formData.surname || 'Not set'}
+                value={surname || 'Not set'}
                 disabled
                 className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border opacity-70 cursor-not-allowed select-none font-semibold"
               />
@@ -411,7 +365,7 @@ export default function ProfilePage() {
             <div className="relative">
               <input
                 type="text"
-                value={formData.class ? `Class ${formData.class}` : 'Unassigned'}
+                value={userClass ? `Class ${userClass}` : 'Unassigned'}
                 disabled
                 className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border opacity-70 cursor-not-allowed select-none font-semibold"
               />
@@ -426,7 +380,7 @@ export default function ProfilePage() {
             <div className="relative">
               <input
                 type="text"
-                value={formData.age ? `${formData.age} years old` : 'N/A'}
+                value={age ? `${age} years old` : 'N/A'}
                 disabled
                 className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border opacity-70 cursor-not-allowed select-none font-semibold"
               />
@@ -452,7 +406,7 @@ export default function ProfilePage() {
               { id: 'warm', label: 'Warm', icon: Sparkles },
             ].map((t) => {
               const Icon = t.icon;
-              const active = formData.theme === t.id;
+              const active = theme === t.id;
               return (
                 <button
                   key={t.id}
@@ -488,9 +442,9 @@ export default function ProfilePage() {
               <button
                 key={lang.id}
                 type="button"
-                onClick={() => setFormData({ ...formData, language: lang.id })}
+                onClick={() => setLanguage(lang.id)}
                 className={`py-3 px-4 rounded-2xl text-xs font-semibold border transition-all cursor-pointer ${
-                  formData.language === lang.id
+                  language === lang.id
                     ? 'bg-emerald-500 text-black border-emerald-500 shadow-md font-bold'
                     : 'theme-bg-page theme-border theme-text-secondary hover:theme-text-primary'
                 }`}
@@ -501,92 +455,109 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between pt-2">
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="text-xs text-red-400 hover:underline font-semibold flex items-center gap-1.5 cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5" /> Log out of this device
-          </button>
+        {/* Status Messages */}
+        {message && (
+          <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-mono flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4" />
+            {message}
+          </div>
+        )}
+        {avatarError && (
+          <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-mono flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            {avatarError}
+          </div>
+        )}
 
+        {/* Save Button */}
+        <div className="flex justify-end">
           <button
             type="submit"
             disabled={saving}
-            className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs px-6 py-3 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+            className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold text-xs px-6 py-3 rounded-2xl transition-all shadow-md cursor-pointer"
           >
-            {saving ? 'Saving...' : 'Save Preferences'}
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            {saving ? 'Saving Changes...' : 'Save Preferences'}
           </button>
         </div>
       </form>
 
-      {/* Feedback & Proposal Submission Box */}
-      <div className="p-6 theme-bg-card border theme-border rounded-3xl space-y-4 pt-6">
-        <div className="flex items-center gap-2 mb-1">
-          <MessageSquare className="w-4 h-4 text-emerald-500" />
-          <h2 className="text-base font-serif font-bold">Suggestions, Publishing Requests & Technical Support</h2>
+      {/* Direct School Feedback & Proposal Box */}
+      <div className="p-6 md:p-8 theme-bg-card border theme-border rounded-3xl space-y-6">
+        <div className="flex items-center gap-3 border-b theme-border pb-4">
+          <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500">
+            <MessageSquare className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-lg font-serif font-bold">School Feedback & Suggestion Box</h2>
+            <p className="text-xs theme-text-secondary">
+              Submit ideas, platform improvements, or feedback directly to school administration.
+            </p>
+          </div>
         </div>
-        <p className="text-xs theme-text-secondary">
-          Submit proposals directly to school leaders (e.g. requesting article publishing access, club ideas, or bug reports).
-        </p>
 
         {feedbackSent ? (
-          <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-3">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-            <span>Thank you! Your submission has been received by the administration team.</span>
+          <div className="p-6 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-center space-y-2">
+            <div className="inline-flex p-2 rounded-full bg-emerald-500/20 text-emerald-400 mb-1">
+              <Check className="w-5 h-5" />
+            </div>
+            <h3 className="font-serif font-bold text-sm text-emerald-400">Thank you for your feedback!</h3>
+            <p className="text-xs theme-text-secondary">
+              Your message was delivered directly to the administration channel.
+            </p>
           </div>
         ) : (
           <form onSubmit={handleSubmitFeedback} className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold theme-text-secondary">Category</label>
+                <label className="text-xs font-semibold theme-text-secondary">Topic Category</label>
                 <select
                   value={feedbackType}
                   onChange={(e) => setFeedbackType(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+                  className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500 font-medium"
                 >
                   <option value="School Proposal / Suggestion">School Proposal / Suggestion</option>
-                  <option value="Article Publishing Request (Literature / News)">Article Publishing Request (Literature / News)</option>
-                  <option value="Technical Bug Report">Technical Bug Report</option>
-                  <option value="Other Inquiry">Other Inquiry</option>
+                  <option value="Bug / Platform Issue">Bug / Technical Issue</option>
+                  <option value="Curriculum & Learning Inquiry">Curriculum & Learning</option>
+                  <option value="Club Activity Request">Club Activity Request</option>
+                  <option value="Other / General Thought">Other / General Thought</option>
                 </select>
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold theme-text-secondary">
-                  Contact Info (Telegram @username or Phone)
+                  Contact Info <span className="font-mono text-[10px]">(Optional for follow-up)</span>
                 </label>
                 <input
                   type="text"
-                  required
+                  placeholder="Telegram @username or phone number"
                   value={contactInfo}
                   onChange={(e) => setContactInfo(e.target.value)}
-                  placeholder="e.g. @username or +99890..."
-                  className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+                  className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500 font-medium"
                 />
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold theme-text-secondary">Message & Details</label>
+              <label className="text-xs font-semibold theme-text-secondary">Your Message</label>
               <textarea
                 rows={4}
                 required
+                placeholder="Share your detailed feedback, ideas for the school, or feature suggestions..."
                 value={feedbackMessage}
                 onChange={(e) => setFeedbackMessage(e.target.value)}
-                placeholder="Explain your proposal, role, or technical problem in detail..."
-                className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500"
+                className="w-full px-4 py-3 rounded-2xl text-xs theme-bg-page border theme-border focus:outline-none focus:border-emerald-500 font-medium leading-relaxed resize-none"
               />
             </div>
 
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={submittingFeedback}
-                className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-xs px-6 py-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                disabled={submittingFeedback || !feedbackMessage.trim()}
+                className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-semibold text-xs px-6 py-2.5 rounded-xl transition-all shadow-md cursor-pointer"
               >
-                <Send className="w-3.5 h-3.5" />
-                <span>{submittingFeedback ? 'Submitting...' : 'Send Proposal'}</span>
+                {submittingFeedback ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {submittingFeedback ? 'Submitting...' : 'Send Message'}
               </button>
             </div>
           </form>

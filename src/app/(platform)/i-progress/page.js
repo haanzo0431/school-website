@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Award, BookOpen, Loader2, User, CalendarDays } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 const ALL_SUBJECTS = [
   'Matematika', 'Fizika', 'Ona tili', 'Tarix', 'Informatika',
@@ -10,49 +11,52 @@ const ALL_SUBJECTS = [
 ];
 
 export default function ChildProgressPage() {
+  const { user, profile, loading: userLoading } = useUser();
   const [child, setChild] = useState(null);
   const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('Hammasi');
 
   useEffect(() => {
+    if (!user) return;
+
+    let isMounted = true;
     async function load() {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        const { data: me } = await supabase
-          .from('profiles').select('child_id').eq('id', user.id).maybeSingle();
-
-        let childId = me?.child_id;
+        let childId = profile?.child_id;
         if (!childId) {
           const { data: alt } = await supabase
             .from('profiles').select('id').eq('parent_id', user.id).maybeSingle();
           childId = alt?.id;
         }
         if (!childId) {
-          setError('Farzandingiz akkauntga ulanmagan.');
+          if (isMounted) setError('Farzandingiz akkauntga ulanmagan.');
           return;
         }
 
-        const { data: kid } = await supabase
-          .from('profiles').select('*').eq('id', childId).maybeSingle();
-        setChild(kid);
+        const [{ data: kid }, { data: scores }] = await Promise.all([
+          supabase.from('profiles').select('*').eq('id', childId).maybeSingle(),
+          supabase.from('formative_view').select('*')
+            .eq('student_id', childId)
+            .order('lesson_date', { ascending: false }),
+        ]);
 
-        const { data: scores } = await supabase
-          .from('formative_view').select('*')
-          .eq('student_id', childId)
-          .order('lesson_date', { ascending: false });
-        setRows(scores || []);
+        if (isMounted) {
+          setChild(kid);
+          setRows(scores || []);
+        }
       } catch (e) {
-        setError(e.message);
+        if (isMounted) setError(e.message);
       } finally {
-        setLoading(false);
+        if (isMounted) setDataLoading(false);
       }
     }
     load();
-  }, []);
+    return () => { isMounted = false; };
+  }, [user, profile]);
+
+  const loading = userLoading || (user ? dataLoading : false);
 
   const bySubject = {};
   rows.forEach((r) => {

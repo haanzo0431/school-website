@@ -15,6 +15,8 @@ import {
   Award,
   Sparkles,
   Layers,
+  User,
+  Loader2,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
 
@@ -30,31 +32,53 @@ const CATEGORIES = [
   { id: 'ACHIEVEMENTS', label: 'Achievements', icon: Award },
 ];
 
+const PAGE_SIZE = 12;
+
 export default function NewsPage() {
   const [posts, setPosts] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
 
   useEffect(() => {
     async function fetchPosts() {
-      const { data, error } = await supabase
+      setLoading(true);
+      // Limit post queries to card metadata with pagination (no unbounded markdown body downloads)
+      const { data, count, error } = await supabase
         .from('posts')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .select('id, title, category, created_at, author_name, image_url', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(0, PAGE_SIZE - 1);
 
       if (!error && data) {
         setPosts(data);
+        setHasMore((count || 0) > PAGE_SIZE);
       }
       setLoading(false);
     }
     fetchPosts();
   }, []);
 
-  const getPostThumbnail = (post) => {
-    if (post.image_url) return post.image_url;
-    if (!post.content) return null;
-    const match = post.content.match(/!\[.*?\]\((.*?)\)/);
-    return match ? match[1] : null;
+  const handleLoadMore = async () => {
+    setLoadingMore(true);
+    const nextPage = page + 1;
+    const from = (nextPage - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    const { data, count, error } = await supabase
+      .from('posts')
+      .select('id, title, category, created_at, author_name, image_url', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (!error && data) {
+      setPosts((prev) => [...prev, ...data]);
+      setPage(nextPage);
+      setHasMore((count || 0) > to + 1);
+    }
+    setLoadingMore(false);
   };
 
   const filteredPosts =
@@ -102,11 +126,7 @@ export default function NewsPage() {
           ) : (
             <div className="grid gap-6">
               {filteredPosts.map((post) => {
-                const thumbnail = getPostThumbnail(post);
-                const cleanSnippet = (post.content || '')
-                  .replace(/!\[.*?\]\(.*?\)/g, '')
-                  .replace(/#+\s/g, '')
-                  .trim();
+                const thumbnail = post.image_url;
 
                 return (
                   <article
@@ -124,13 +144,15 @@ export default function NewsPage() {
                           <Calendar className="w-3 h-3" />
                           {new Date(post.created_at).toLocaleDateString()}
                         </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1">
+                          <User className="w-3 h-3" />
+                          {post.author_name || 'Author'}
+                        </span>
                       </div>
                       <h2 className="text-xl font-serif font-bold group-hover:text-emerald-400 transition-colors">
                         <Link href={`/i-news/${post.id}`}>{post.title}</Link>
                       </h2>
-                      <p className="text-xs theme-text-secondary leading-relaxed line-clamp-3">
-                        {cleanSnippet}
-                      </p>
                       <div className="pt-2">
                         <Link
                           href={`/i-news/${post.id}`}
@@ -153,6 +175,19 @@ export default function NewsPage() {
                   </article>
                 );
               })}
+
+              {hasMore && (
+                <div className="text-center pt-4">
+                  <button
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    className="px-6 py-2.5 rounded-xl border theme-border hover:border-emerald-500 text-xs font-mono font-bold text-emerald-400 hover:bg-emerald-500/10 transition-colors inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {loadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {loadingMore ? 'Loading more...' : 'Load more articles'}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </main>
@@ -164,7 +199,7 @@ export default function NewsPage() {
                 Topics & Sections
               </h3>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-semibold">
-                {posts.length} Total
+                {posts.length} Loaded
               </span>
             </div>
 

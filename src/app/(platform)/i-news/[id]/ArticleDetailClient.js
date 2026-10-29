@@ -7,12 +7,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ArrowLeft, Calendar, User, Clock, Share2, Edit3, Trash2, Loader2 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 export default function ArticleDetailClient() {
   const params = useParams();
   const router = useRouter();
+  const { user: currentUser, role: userRole } = useUser();
   const [post, setPost] = useState(null);
-  const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState(null);
@@ -24,9 +25,6 @@ export default function ArticleDetailClient() {
 
       try {
         setLoading(true);
-
-        const { data: { user } } = await supabase.auth.getUser();
-        setCurrentUser(user);
 
         const { data, error } = await supabase
           .from('posts')
@@ -55,16 +53,24 @@ export default function ArticleDetailClient() {
     }
   };
 
+  const canModify = currentUser && post && (currentUser.id === post.author_id || userRole === 'admin');
+
   const handleDelete = async () => {
+    if (!canModify) {
+      alert('You are not authorized to delete this article.');
+      return;
+    }
+
     if (!window.confirm('Are you sure you want to delete this article? This action cannot be undone.')) {
       return;
     }
 
     setDeleting(true);
-    const { error } = await supabase
-      .from('posts')
-      .delete()
-      .eq('id', post.id);
+    let query = supabase.from('posts').delete().eq('id', post.id);
+    if (userRole !== 'admin') {
+      query = query.eq('author_id', currentUser.id);
+    }
+    const { error } = await query;
 
     setDeleting(false);
 
@@ -78,8 +84,6 @@ export default function ArticleDetailClient() {
   const readingTime = post?.content
     ? Math.max(1, Math.ceil(post.content.trim().split(/\s+/).length / 200))
     : 1;
-
-  const isAuthor = currentUser && post && currentUser.id === post.author_id;
 
   if (loading) {
     return (
@@ -117,7 +121,7 @@ export default function ArticleDetailClient() {
           </Link>
 
           <div className="flex items-center gap-2">
-            {isAuthor && (
+            {canModify && (
               <>
                 <Link
                   href={`/editor?id=${post.id}`}
