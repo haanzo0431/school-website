@@ -1,11 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   Users, Plus, Trash2, CheckCircle2, 
-  ShieldAlert, UserPlus, BookOpen, AlertCircle, RefreshCw, UserCheck, UserX
+  ShieldAlert, UserPlus, BookOpen, AlertCircle, RefreshCw, UserCheck, UserX, Key
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+
+function generateSecurePassword(name = 'Student') {
+  const clean = name.replace(/[^a-zA-Z]/g, '') || 'Student';
+  const prefix = clean.charAt(0).toUpperCase() + clean.slice(1, 6);
+  const randomDigits = Math.floor(1000 + Math.random() * 9000);
+  const symbols = '!@#$%';
+  const symbol = symbols[Math.floor(Math.random() * symbols.length)];
+  return `${prefix}${randomDigits}${symbol}`;
+}
 
 export default function AdminClassManagementPage() {
   const [classes, setClasses] = useState([]);
@@ -13,7 +22,6 @@ export default function AdminClassManagementPage() {
   const [newClassName, setNewClassName] = useState('');
   
   const [allProfiles, setAllProfiles] = useState([]);
-  const [classStudents, setClassStudents] = useState([]);
   const [availableStudents, setAvailableStudents] = useState([]);
   const [selectedStudentToAssign, setSelectedStudentToAssign] = useState('');
 
@@ -32,30 +40,20 @@ export default function AdminClassManagementPage() {
   const [message, setMessage] = useState(null);
 
   // Helper to strictly identify student accounts only
-  const isStudentProfile = (p) => {
+  const isStudentProfile = useCallback((p) => {
     if (!p) return false;
-
     const role = (p.role || '').toLowerCase().trim();
+    if (role) return role === 'student';
     const email = (p.email || '').toLowerCase().trim();
-    const name = (p.name || p.first_name || '').toLowerCase().trim();
-
-    // Explicitly reject admins, teachers, and parents
-    if (['admin', 'teacher', 'parent', 'staff'].includes(role)) return false;
     if (email.startsWith('admin') || email.startsWith('t-') || email.startsWith('p-')) return false;
-    if (name.startsWith('admin') || name.startsWith('t-') || name.startsWith('p ')) return false;
-
-    // Explicitly accept student roles or student email patterns
-    if (role === 'student') return true;
-    if (email.startsWith('s-') || email.startsWith('s.') || email.includes('student') || name.includes('student')) return true;
-
-    return false;
-  };
+    return email.startsWith('s-') || email.includes('student');
+  }, []);
 
   // Clean class name helper ("Class 10-A" -> "10-A")
-  const cleanName = (name) => {
+  const cleanName = useCallback((name) => {
     if (!name) return '';
     return name.toString().replace(/^class\s+/i, '').trim();
-  };
+  }, []);
 
   // Helper to format/auto-generate school email
   const formatStudentEmail = (firstName, lastName, customInput) => {
@@ -76,34 +74,25 @@ export default function AdminClassManagementPage() {
     return raw;
   };
 
-  useEffect(() => {
-    fetchInitialData();
-  }, []);
-
-  useEffect(() => {
-    if (selectedClass && allProfiles.length >= 0) {
-      filterRosterForClass(selectedClass, allProfiles);
-    }
-  }, [selectedClass, allProfiles]);
-
-  async function fetchInitialData() {
+  const fetchInitialData = useCallback(async () => {
     try {
-      setLoading(true);
+      // Parallelize queries using Promise.all & fetch only required columns
+      const [classRes, profilesRes] = await Promise.all([
+        supabase
+          .from('classes')
+          .select('*')
+          .order('name', { ascending: true }),
+        supabase
+          .from('profiles')
+          .select('id, first_name, surname, name, class_id, class, role, email'),
+      ]);
 
-      const { data: classList } = await supabase
-        .from('classes')
-        .select('*')
-        .order('name', { ascending: true });
-
-      const { data: profilesData, error: profErr } = await supabase
-        .from('profiles')
-        .select('*');
-
-      if (profErr) {
-        console.error('Error loading profiles:', profErr);
+      if (profilesRes.error) {
+        console.error('Error loading profiles:', profilesRes.error);
       }
 
-      const profiles = profilesData || [];
+      const classList = classRes.data || [];
+      const profiles = profilesRes.data || [];
       setAllProfiles(profiles);
 
       // Strict filter for students only in dropdowns
@@ -119,15 +108,15 @@ export default function AdminClassManagementPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [isStudentProfile]);
 
-  function filterRosterForClass(cls, profiles) {
-    if (!cls) return;
+  const classStudents = useMemo(() => {
+    if (!selectedClass) return [];
 
-    const targetId = cls.id;
-    const targetClean = cleanName(cls.name).toLowerCase();
+    const targetId = selectedClass.id;
+    const targetClean = cleanName(selectedClass.name).toLowerCase();
 
-    const enrolled = profiles.filter((p) => {
+    return allProfiles.filter((p) => {
       // Must be a student profile
       if (!isStudentProfile(p)) return false;
 
@@ -141,9 +130,18 @@ export default function AdminClassManagementPage() {
 
       return false;
     });
+  }, [selectedClass, allProfiles, cleanName, isStudentProfile]);
 
-    setClassStudents(enrolled);
-  }
+  useEffect(() => {
+    let isMounted = true;
+    async function init() {
+      await fetchInitialData();
+    }
+    init();
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchInitialData]);
 
   // Admin: Create a new class
   async function handleCreateClass(e) {
@@ -197,13 +195,19 @@ export default function AdminClassManagementPage() {
 
     setSaving(true);
     const formattedEmail = formatStudentEmail(newStudentFirstName, newStudentLastName, newStudentEmail);
-    const finalPassword = newStudentPassword.trim() || 'student123';
+    const finalPassword = newStudentPassword.trim() || generateSecurePassword(newStudentFirstName || 'Student');
     const cleanedClassName = cleanName(selectedClass.name);
 
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      };
+
       const res = await fetch('/api/admin/create-student', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           firstName: newStudentFirstName.trim(),
           lastName: newStudentLastName.trim(),
@@ -510,25 +514,34 @@ export default function AdminClassManagementPage() {
                         onChange={(e) => setNewStudentEmail(e.target.value)}
                         className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-card border theme-border focus:outline-none focus:border-emerald-500 font-mono"
                       />
-                      <input
-                        type="text"
-                        placeholder="Password (Default: student123)"
-                        value={newStudentPassword}
-                        onChange={(e) => setNewStudentPassword(e.target.value)}
-                        className="w-full px-4 py-2.5 rounded-xl text-xs theme-bg-card border theme-border focus:outline-none focus:border-emerald-500 font-mono"
-                      />
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Password (Auto-generated if empty)"
+                          value={newStudentPassword}
+                          onChange={(e) => setNewStudentPassword(e.target.value)}
+                          className="w-full px-4 py-2.5 pr-20 rounded-xl text-xs theme-bg-card border theme-border focus:outline-none focus:border-emerald-500 font-mono"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setNewStudentPassword(generateSecurePassword(newStudentFirstName || 'Student'))}
+                          className="absolute right-2 top-2 text-[10px] font-mono text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <RefreshCw className="w-3 h-3" /> Auto
+                        </button>
+                      </div>
                     </div>
 
                     <button
                       type="submit"
                       disabled={saving || !newStudentFirstName.trim()}
-                      className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
+                      className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-semibold transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <UserPlus className="w-4 h-4" /> Create Student Account
                     </button>
 
                     <p className="text-[10px] theme-text-secondary font-mono italic">
-                      Tip: Leaving email blank auto-generates <strong>s-firstname.lastname@xonqa.school</strong>. Leaving password blank sets it to <strong>student123</strong>.
+                      Tip: Leaving email blank auto-generates <strong>s-firstname.lastname@xonqa.school</strong>. Leaving password blank generates a secure unique password.
                     </p>
                   </form>
                 )}

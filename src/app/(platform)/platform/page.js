@@ -9,12 +9,11 @@ import {
   TrendingUp, Users, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 export default function PlatformPage() {
   const router = useRouter();
-  const [user, setUser] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [role, setRole] = useState('student');
+  const { user, profile, role, loading: userLoading } = useUser();
   const [loading, setLoading] = useState(true);
 
   // Dynamic state loaded from Supabase
@@ -36,104 +35,73 @@ export default function PlatformPage() {
   };
 
   useEffect(() => {
-    async function loadUserDataAndContent() {
+    if (userLoading) return;
+    if (!user) return;
+
+    // Authoritative Admin Guard (from profile.role in DB)
+    if (role === 'admin') {
+      router.replace('/admin/classes');
+      return;
+    }
+
+    if (role !== 'student') return;
+
+    let isMounted = true;
+
+    async function loadStudentContent() {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          setUser(user);
-
-          // Fetch Profile
-          const { data: profileData } = await supabase
-            .from('profiles')
+        // Parallelize serial await waterfalls using Promise.all
+        const [gradesRes, newsRes, lessonsRes] = await Promise.all([
+          supabase
+            .from('grades')
             .select('*')
-            .eq('id', user.id)
-            .single();
+            .eq('student_id', user.id),
+          supabase
+            .from('posts')
+            .select('id, title, category, content, author_name, created_at, image_url')
+            .order('created_at', { ascending: false })
+            .limit(6),
+          supabase
+            .from('lessons')
+            .select('*')
+            .order('period', { ascending: true }),
+        ]);
 
-          if (profileData) {
-            setProfile(profileData);
-          }
+        if (!isMounted) return;
 
-          // Determine Role
-          const emailPrefix = user.email ? user.email.split('@')[0].toLowerCase() : '';
-          let userRole = profileData?.role;
-
-          if (emailPrefix.startsWith('t-')) {
-            userRole = 'teacher';
-          } else if (emailPrefix.startsWith('p-')) {
-            userRole = 'parent';
-          } else if (emailPrefix.startsWith('s-')) {
-            userRole = 'student';
-          } else if (emailPrefix.startsWith('a-') || emailPrefix === 'admin' || userRole === 'admin') {
-            userRole = 'admin';
-          } else if (!userRole || userRole === 'viewer') {
-            userRole = 'student';
-          }
-
-          // Immediate Admin Redirect Guard
-          if (userRole === 'admin') {
-            router.replace('/admin/classes');
-            return;
-          }
-
-          setRole(userRole);
-
-          // Fetch Real Backend Data for Students
-          if (userRole === 'student') {
-            // 1. Fetch Student Grades from Supabase
-            const { data: gradesData } = await supabase
-              .from('grades')
-              .select('*')
-              .eq('student_id', user.id);
-
-            if (gradesData && gradesData.length > 0) {
-              const deduplicated = {};
-              gradesData.forEach((item) => {
-                const key = (item.subject || item.subject_name || 'unknown').toLowerCase().trim();
-                if (!deduplicated[key] || item.id > deduplicated[key].id) {
-                  deduplicated[key] = item;
-                }
-              });
-
-              setStudentGrades(Object.values(deduplicated));
-            } else {
-              setStudentGrades([]);
+        if (gradesRes.data && gradesRes.data.length > 0) {
+          const deduplicated = {};
+          gradesRes.data.forEach((item) => {
+            const key = (item.subject || item.subject_name || 'unknown').toLowerCase().trim();
+            if (!deduplicated[key] || item.id > deduplicated[key].id) {
+              deduplicated[key] = item;
             }
+          });
+          setStudentGrades(Object.values(deduplicated));
+        } else {
+          setStudentGrades([]);
+        }
 
-            // 2. Fetch Real Posts from 'posts'
-            const { data: newsData, error: newsError } = await supabase
-              .from('posts')
-              .select('*')
-              .order('created_at', { ascending: false })
-              .limit(6);
+        if (newsRes.data && newsRes.data.length > 0) {
+          setLatestArticles(newsRes.data);
+        }
 
-            if (newsError) {
-              console.error('Supabase posts fetch error:', newsError);
-            }
-
-            if (newsData && newsData.length > 0) {
-              setLatestArticles(newsData);
-            }
-
-            // 3. Fetch Tomorrow's Lessons from Supabase
-            const { data: lessonsData } = await supabase
-              .from('lessons')
-              .select('*')
-              .order('period', { ascending: true });
-
-            if (lessonsData && lessonsData.length > 0) {
-              setTomorrowsLessons(lessonsData);
-            }
-          }
+        if (lessonsRes.data && lessonsRes.data.length > 0) {
+          setTomorrowsLessons(lessonsRes.data);
         }
       } catch (error) {
         console.error('Error loading platform user data:', error);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     }
 
-    loadUserDataAndContent();
-  }, [router]);
+    loadStudentContent();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, role, userLoading, router]);
 
   const rawName = user?.email ? user.email.split('@')[0] : 'Student';
   const displayName = profile?.first_name || profile?.name || rawName;
@@ -161,7 +129,9 @@ export default function PlatformPage() {
     return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
   };
 
-  if (loading) {
+  const isPageLoading = userLoading || (role === 'student' && loading);
+
+  if (isPageLoading) {
     return (
       <div className="p-8 max-w-5xl mx-auto flex justify-center items-center min-h-[60vh]">
         <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-emerald-500"></div>
@@ -298,7 +268,7 @@ export default function PlatformPage() {
 
                   <div className="flex items-center justify-between pt-3 border-t theme-border text-[11px] theme-text-secondary">
                     <span>By {article.author || article.author_name || 'Admin'}</span>
-                    <Link href="/i-news" className="text-emerald-400 hover:underline font-medium">Read →</Link>
+                    <Link href={`/i-news/${article.id}`} className="text-emerald-400 hover:underline font-medium">Read →</Link>
                   </div>
                 </div>
               ))}

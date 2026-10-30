@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
@@ -8,57 +8,17 @@ import {
   Home, Users, 
   LogOut, Calendar, 
   MessageSquare, User, Newspaper, GraduationCap,
-  TrendingUp, ClipboardCheck, PenSquare, UserPlus,
+  TrendingUp, PenSquare, UserPlus,
   UserCheck, FileText, Menu, X
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 export default function PlatformSidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [role, setRole] = useState('student');
-  const [profile, setProfile] = useState(null);
+  const { profile, role } = useUser();
   const [open, setOpen] = useState(false);
-
-  const isAdminRoute = pathname.startsWith('/admin');
-
-  // Sahifa almashganda menyuni yopish
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
-
-  useEffect(() => {
-    async function loadUserData() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single();
-
-        if (data) {
-          setProfile(data);
-        }
-
-        const emailPrefix = user.email ? user.email.split('@')[0].toLowerCase() : '';
-        let userRole = data?.role;
-
-        if (emailPrefix.startsWith('a-') || userRole === 'admin') {
-          userRole = 'admin';
-        } else if (emailPrefix.startsWith('t-') || userRole === 'teacher') {
-          userRole = 'teacher';
-        } else if (emailPrefix.startsWith('p-') || userRole === 'parent') {
-          userRole = 'parent';
-        } else if (!userRole || userRole === 'viewer') {
-          userRole = 'student';
-        }
-
-        setRole(userRole);
-      }
-    }
-    loadUserData();
-  }, []);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -96,7 +56,11 @@ export default function PlatformSidebar() {
     ],
   };
 
-  const currentRole = isAdminRoute ? 'admin' : role;
+  // Authoritative role from route context or database (via UserContext)
+  const isAdminRoute = pathname.startsWith('/admin');
+  const currentRole = isAdminRoute
+    ? 'admin'
+    : (['admin', 'teacher', 'parent', 'student'].includes(role) ? role : 'student');
   const links = navLinks[currentRole] || navLinks.student;
 
   const avatarUrl = profile?.avatar_url || profile?.photo_url || profile?.avatar;
@@ -104,11 +68,13 @@ export default function PlatformSidebar() {
     ? `${profile.name || profile.first_name || ''} ${profile.surname || profile.last_name || ''}`.trim() 
     : 'Profile Settings';
 
+  const closeMenu = () => setOpen(false);
+
   return (
     <>
-      {/* Hamburger paneli (faqat telefon / Book Mode) */}
+      {/* Hamburger paneli (faqat telefon / Mobile View) */}
       <div className="md:hidden fixed top-0 inset-x-0 z-40 h-14 flex items-center gap-3 px-4 theme-bg-card border-b theme-border">
-        <button onClick={() => setOpen(true)} aria-label="Open menu" className="p-1">
+        <button onClick={() => setOpen(true)} aria-label="Open menu" className="p-1 cursor-pointer">
           <Menu className="w-6 h-6" />
         </button>
         <span className="font-serif font-bold text-sm">Xonqa Tuman</span>
@@ -118,7 +84,7 @@ export default function PlatformSidebar() {
       {open && (
         <div
           className="md:hidden fixed inset-0 z-40 bg-black/60"
-          onClick={() => setOpen(false)}
+          onClick={closeMenu}
         />
       )}
 
@@ -128,15 +94,15 @@ export default function PlatformSidebar() {
           md:flex md:sticky md:top-0 md:h-screen`}
       >
         <button
-          onClick={() => setOpen(false)}
+          onClick={closeMenu}
           aria-label="Close menu"
-          className="md:hidden absolute top-3 right-3 p-1"
+          className="md:hidden absolute top-3 right-3 p-1 cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
 
         <div className="space-y-6">
-          <Link href={isAdminRoute ? '/admin' : '/platform'} className="flex items-center gap-3.5">
+          <Link href={currentRole === 'admin' ? '/admin' : '/platform'} prefetch={false} onClick={closeMenu} className="flex items-center gap-3.5">
             <div className="relative w-12 h-12 rounded-full overflow-hidden border border-emerald-500/30 shrink-0 bg-emerald-500/10 flex items-center justify-center p-0.5">
               <Image
                 src="/school_logo.png"
@@ -166,6 +132,8 @@ export default function PlatformSidebar() {
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={false}
+                  onClick={closeMenu}
                   className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors ${
                     isActive
                       ? 'bg-emerald-500 text-black shadow-sm'
@@ -184,6 +152,8 @@ export default function PlatformSidebar() {
           {currentRole === 'teacher' && (
             <Link
               href="/editor"
+              prefetch={false}
+              onClick={closeMenu}
               className="flex items-center justify-center gap-2 w-full py-2.5 px-4 mb-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition-all shadow-md cursor-pointer"
             >
               <PenSquare className="w-4 h-4" />
@@ -194,6 +164,8 @@ export default function PlatformSidebar() {
           <div className="pt-4 border-t theme-border space-y-1">
             <Link
               href="/profile"
+              prefetch={false}
+              onClick={closeMenu}
               className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:shadow-[0_0_15px_rgba(16,185,129,0.18)] transition-all duration-200 cursor-pointer"
             >
               {avatarUrl ? (

@@ -23,6 +23,7 @@ import {
   Edit3,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 const calculateWordCount = (text) => {
   if (!text) return 0;
@@ -70,97 +71,77 @@ function EditorForm() {
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingInline, setUploadingInline] = useState(false);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const { user, profile, role: contextRole, loading: userLoading } = useUser();
   const [publishing, setPublishing] = useState(false);
-  const [checkingAuth, setCheckingAuth] = useState(true);
+  const checkingAuth = userLoading;
   const [loadingEdit, setLoadingEdit] = useState(!!editId);
-  const [wordCount, setWordCount] = useState(0);
+  const wordCount = calculateWordCount(content);
   const [isPreview, setIsPreview] = useState(false);
 
   // Auth & Role Check + Load existing draft or post
   useEffect(() => {
-    async function initEditor() {
-      try {
-        // 1. Get current logged-in user
-        const { data: { session } } = await supabase.auth.getSession();
-        const user = session?.user;
-
-        if (!user) {
-          alert('You must be logged in to access the editor.');
-          router.push('/login');
-          return;
-        }
-
-        // 2. Check role from profiles table
-        const { data: profile, error: profileError } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', user.id)
-          .single();
-
-        if (profileError || !profile) {
-          console.error('[Editor] Error fetching profile:', profileError);
-          alert('Could not verify account profile.');
-          router.push('/i-news');
-          return;
-        }
-
-        // 3. Role authorization check (Teacher / Admin / Staff / Editor)
-        const userRole = profile.role ? profile.role.toLowerCase() : '';
-        if (!ALLOWED_ROLES.includes(userRole)) {
-          alert(`Access restricted. Your account role (${profile.role}) cannot write articles.`);
-          router.push('/i-news');
-          return;
-        }
-
-        setCheckingAuth(false);
-
-        // 4. Load draft or existing post for editing
-        if (!editId) {
-          const savedDraft = localStorage.getItem('durbin_editor_draft');
-          if (savedDraft) {
-            try {
-              const { title: t, content: c, category: cat, coverImageUrl: img } = JSON.parse(savedDraft);
-              if (t) setTitle(t);
-              if (c) setContent(c);
-              if (cat) setCategory(cat);
-              if (img) setCoverImageUrl(img);
-            } catch (err) {
-              console.error('Failed to parse draft from localStorage', err);
-            }
-          }
-          return;
-        }
-
-        setLoadingEdit(true);
-        const { data, error } = await supabase
-          .from('posts')
-          .select('*')
-          .eq('id', editId)
-          .single();
-
-        if (error || !data) {
-          alert('Failed to load article for editing.');
-          router.push('/i-news');
-          return;
-        }
-
-        setTitle(data.title || '');
-        setContent(data.content || '');
-        setCategory(data.category || 'GENERAL');
-        setCoverImageUrl(data.image_url || '');
-        setLoadingEdit(false);
-      } catch (err) {
-        console.error('[Editor] Initialization error:', err);
-        setCheckingAuth(false);
-      }
+    if (userLoading) return;
+    if (!user) {
+      alert('You must be logged in to access the editor.');
+      router.push('/login');
+      return;
     }
 
-    initEditor();
-  }, [editId, router]);
+    const userRole = (contextRole || profile?.role || '').toLowerCase();
+    if (!ALLOWED_ROLES.includes(userRole)) {
+      alert(`Access restricted. Your account role (${contextRole || profile?.role}) cannot write articles.`);
+      router.push('/i-news');
+      return;
+    }
 
-  useEffect(() => {
-    setWordCount(calculateWordCount(content));
-  }, [content]);
+    async function loadPostOrDraft() {
+      if (!editId) {
+        const savedDraft = localStorage.getItem('durbin_editor_draft');
+        if (savedDraft) {
+          try {
+            const { title: t, content: c, category: cat, coverImageUrl: img } = JSON.parse(savedDraft);
+            if (t) setTitle(t);
+            if (c) setContent(c);
+            if (cat) setCategory(cat);
+            if (img) setCoverImageUrl(img);
+          } catch (err) {
+            console.error('Failed to parse draft from localStorage', err);
+          }
+        }
+        return;
+      }
+
+      setLoadingEdit(true);
+      const { data, error } = await supabase
+        .from('posts')
+        .select('*')
+        .eq('id', editId)
+        .single();
+
+      if (error || !data) {
+        alert('Failed to load article for editing.');
+        router.push('/i-news');
+        return;
+      }
+
+      // IDOR authorization check: users can only edit their own posts unless admin
+      const isOwner = data.author_id === user.id;
+      const isAdmin = userRole === 'admin';
+      if (!isOwner && !isAdmin) {
+        alert('Access denied: You can only edit your own articles.');
+        router.push('/i-news');
+        return;
+      }
+
+      setTitle(data.title || '');
+      setContent(data.content || '');
+      setCategory(data.category || 'GENERAL');
+      setCoverImageUrl(data.image_url || '');
+      setLoadingEdit(false);
+    }
+
+    loadPostOrDraft();
+  }, [user, profile, contextRole, userLoading, editId, router]);
 
   useEffect(() => {
     if (!editId && !checkingAuth) {
@@ -333,22 +314,13 @@ function EditorForm() {
 
     setPublishing(true);
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const user = session?.user;
-
     if (!user) {
       alert('You must be logged in to publish or update articles.');
       setPublishing(false);
       return;
     }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-
-    const userRole = profile?.role ? profile.role.toLowerCase() : '';
+    const userRole = (contextRole || profile?.role || '').toLowerCase();
     if (!ALLOWED_ROLES.includes(userRole)) {
       alert('You are not authorized to publish articles.');
       setPublishing(false);
@@ -365,10 +337,17 @@ function EditorForm() {
     let error = null;
 
     if (editId) {
-      const response = await supabase
+      let query = supabase
         .from('posts')
         .update(payload)
         .eq('id', editId);
+
+      // Enforce author_id ownership on update if not admin
+      if (userRole !== 'admin') {
+        query = query.eq('author_id', user.id);
+      }
+
+      const response = await query;
       error = response.error;
     } else {
       const authorName = user.email ? user.email.split('@')[0] : 'Author';

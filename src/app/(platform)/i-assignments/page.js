@@ -5,6 +5,7 @@ import {
   Sparkles, CheckCircle2, Loader2, X, Play, Save, AlertCircle, Upload, FileCode, BookOpen,
 } from 'lucide-react';
 import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 const ALL_SUBJECTS = [
   'Matematika', 'Fizika', 'Ona tili', 'Tarix', 'Informatika',
@@ -35,11 +36,13 @@ function extractQuestions(html) {
 }
 
 export default function AssignmentsPage() {
-  const [loading, setLoading] = useState(true);
-  const [role, setRole] = useState('student');
-  const [user, setUser] = useState(null);
-  const [subject, setSubject] = useState('');
-  const [studentId, setStudentId] = useState(null);
+  const { user, profile, role: contextRole, loading: userLoading } = useUser();
+  const role = contextRole || profile?.role || 'student';
+  const subject = profile?.subject || '';
+  const [dataLoading, setDataLoading] = useState(true);
+  const [resolvedStudentId, setResolvedStudentId] = useState(null);
+  const studentId = role === 'student' ? user?.id : (profile?.child_id || resolvedStudentId);
+  const loading = userLoading || (user ? dataLoading : false);
   const [date, setDate] = useState(todayStr());
 
   const [tests, setTests] = useState([]);
@@ -63,29 +66,27 @@ export default function AssignmentsPage() {
   const [viewLesson, setViewLesson] = useState(null);
 
   useEffect(() => {
-    async function init() {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      if (!u) return;
-      setUser(u);
-      const { data: me } = await supabase
-        .from('profiles').select('role, subject, child_id').eq('id', u.id).maybeSingle();
-      const r = me?.role || 'student';
-      setRole(r);
-      setSubject(me?.subject || '');
-      if (r === 'student') setStudentId(u.id);
-      if (r === 'parent') {
-        let cid = me?.child_id;
-        if (!cid) {
-          const { data: alt } = await supabase
-            .from('profiles').select('id').eq('parent_id', u.id).maybeSingle();
-          cid = alt?.id;
+    if (!user) return;
+
+    let isMounted = true;
+    async function resolveStudentId() {
+      const r = contextRole || profile?.role || 'student';
+      if (r === 'parent' && !profile?.child_id) {
+        const { data: alt } = await supabase
+          .from('profiles').select('id').eq('parent_id', user.id).maybeSingle();
+        if (isMounted) {
+          setResolvedStudentId(alt?.id || null);
+          setDataLoading(false);
         }
-        setStudentId(cid || null);
+      } else {
+        if (isMounted) {
+          setDataLoading(false);
+        }
       }
-      setLoading(false);
     }
-    init();
-  }, []);
+    resolveStudentId();
+    return () => { isMounted = false; };
+  }, [user, profile, contextRole]);
 
   const loadDay = useCallback(async () => {
     if (!user) return;
@@ -97,37 +98,52 @@ export default function AssignmentsPage() {
     setTests(t || []);
 
     const ids = (t || []).map((x) => x.id);
+    let qs = [];
     if (ids.length) {
-      const { data: qs } = await supabase
-        .from('classwork_test_questions').select('*')
-        .in('test_id', ids).order('position');
-      setQuestions(qs || []);
+      // Exclude `correct` column from student queries to maintain grading integrity
+      const selectFields = role === 'teacher'
+        ? 'id, test_id, position, question, options, correct'
+        : 'id, test_id, position, question, options';
+
+      const { data } = await supabase
+        .from('classwork_test_questions')
+        .select(selectFields)
+        .in('test_id', ids)
+        .order('position');
+      qs = data || [];
+      setQuestions(qs);
     } else {
       setQuestions([]);
     }
 
     if (role === 'teacher') {
-      const mine = (t || [])[0];
+      const mine = (t || []).find((x) => x.teacher_id === user.id) || (t || [])[0];
       setLessonHtml(mine?.lesson_html || '');
       setLessonName(mine?.lesson_name || '');
       if (mine) {
-        const { data: qs } = await supabase
-          .from('classwork_test_questions').select('*')
-          .eq('test_id', mine.id).order('position');
+        const mineQs = qs.filter((q) => q.test_id === mine.id);
         const filled = emptyQs();
-        (qs || []).slice(0, Q_COUNT).forEach((x, i) => {
+        mineQs.slice(0, Q_COUNT).forEach((x, i) => {
           filled[i] = { question: x.question, options: x.options, correct: x.correct };
         });
         setForm(filled);
       } else {
         setForm(emptyQs());
       }
-      const { data: att } = await supabase
-        .from('classwork_attempts').select('*')
-        .eq('teacher_id', user.id).eq('lesson_date', date);
-      const { data: studs } = await supabase
-        .from('profiles').select('id, first_name, surname, name')
-        .eq('role', 'student').eq('class', CLASS_NAME);
+
+      // Parallelize queries using Promise.all
+      const [{ data: att }, { data: studs }] = await Promise.all([
+        supabase
+          .from('classwork_attempts')
+          .select('*')
+          .eq('teacher_id', user.id)
+          .eq('lesson_date', date),
+        supabase
+          .from('profiles')
+          .select('id, first_name, surname, name')
+          .eq('role', 'student')
+          .eq('class', CLASS_NAME),
+      ]);
       const rows = (studs || []).map((s) => {
         const mineAtt = (att || []).filter((a) => a.student_id === s.id);
         return {
@@ -148,7 +164,13 @@ export default function AssignmentsPage() {
     }
   }, [user, role, date, studentId]);
 
-  useEffect(() => { loadDay(); }, [loadDay]);
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      if (isMounted) await loadDay();
+    })();
+    return () => { isMounted = false; };
+  }, [loadDay]);
 
   // ---------- Ustoz ----------
   const questionsReady = form.every(
@@ -254,17 +276,41 @@ export default function AssignmentsPage() {
   };
 
   const submit = async () => {
-    const list = qsFor(active);
-    const correct = list.reduce((s, q, i) => s + (answers[i] === q.correct ? 1 : 0), 0);
-    const score = list.length ? round1((correct / list.length) * 6) : 0;
     setSaving(true);
-    const { data, error } = await supabase.from('classwork_attempts').insert([{
-      student_id: user.id, teacher_id: active.teacher_id, subject: active.subject,
-      lesson_date: date, attempt_no: attFor(active).length + 1, score,
-    }]).select().single();
-    if (!error && data) setAttempts((p) => [...p, data]);
-    setResult(error ? { error: error.message } : { correct, total: list.length, score });
-    setSaving(false);
+    setResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/classwork/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          testId: active.id,
+          answers,
+          lessonDate: date,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Test javoblarini yuborishda xatolik yuz berdi.');
+      }
+
+      if (data.attempt) {
+        setAttempts((p) => [...p, data.attempt]);
+      }
+      setResult({
+        correct: data.correct,
+        total: data.total,
+        score: data.score,
+      });
+    } catch (err) {
+      setResult({ error: err.message });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (loading) {

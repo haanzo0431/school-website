@@ -1,26 +1,31 @@
-import { createClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
+import { verifyCaller } from '@/lib/serverAuth';
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-// Login ID (masalan "teacher1") bo'yicha auth foydalanuvchini topadi
-async function findUserId(prefix, rawId) {
+// Login ID (masalan "teacher1") bo'yicha profil topadi (Indexed O(1) DB lookup)
+async function findUserId(prefix, rawId, adminClient) {
   if (!rawId) return null;
   let id = rawId.toLowerCase().trim().replace(/\s+/g, '');
   if (!id.startsWith(`${prefix}-`)) id = `${prefix}-${id}`;
   const email = `${id}@xonqa.school`;
 
-  const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
-  if (error) return null;
-  const found = data.users.find((u) => (u.email || '').toLowerCase() === email);
-  return found ? found.id : null;
+  const { data } = await adminClient
+    .from('profiles')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle();
+
+  return data ? data.id : null;
 }
 
 export async function POST(req) {
   try {
+    // Verify caller is an authenticated admin
+    const authCheck = await verifyCaller(req, 'admin');
+    if (authCheck.error) {
+      return NextResponse.json({ error: authCheck.error }, { status: authCheck.status });
+    }
+    const { adminClient } = authCheck;
+
     const {
       firstName, surname, gradeClass, age,
       studentId, password, teacherId, parentId,
@@ -38,20 +43,20 @@ export async function POST(req) {
     let parentUuid = null;
 
     if (teacherId && teacherId.trim()) {
-      teacherUuid = await findUserId('t', teacherId);
+      teacherUuid = await findUserId('t', teacherId, adminClient);
       if (!teacherUuid) {
         return NextResponse.json({ error: `Teacher "${teacherId}" topilmadi.` }, { status: 400 });
       }
     }
     if (parentId && parentId.trim()) {
-      parentUuid = await findUserId('p', parentId);
+      parentUuid = await findUserId('p', parentId, adminClient);
       if (!parentUuid) {
         return NextResponse.json({ error: `Parent "${parentId}" topilmadi.` }, { status: 400 });
       }
     }
 
     // 1. Auth akkaunt
-    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+    const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
@@ -63,7 +68,7 @@ export async function POST(req) {
     }
 
     // 2. Profil
-    const { error: profileError } = await supabaseAdmin.from('profiles').upsert([
+    const { error: profileError } = await adminClient.from('profiles').upsert([
       {
         id: authData.user.id,
         first_name: firstName,
@@ -79,7 +84,7 @@ export async function POST(req) {
     ]);
 
     if (profileError) {
-      await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+      await adminClient.auth.admin.deleteUser(authData.user.id);
       return NextResponse.json({ error: profileError.message }, { status: 400 });
     }
 

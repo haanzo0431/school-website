@@ -63,17 +63,26 @@ export default function LoginPage() {
       return;
     }
 
-    // 3. Fetch user's role from profiles table
+    // 3. Fast Role Detection & Instant Redirect (0ms latency for standard school emails)
+    const lowerEmail = formattedEmail.toLowerCase();
+    if (lowerEmail === 'admin@xonqa.school' || lowerEmail.startsWith('a-') || lowerEmail.startsWith('admin')) {
+      router.push('/admin/classes');
+      return;
+    }
+
+    if (lowerEmail.startsWith('t-') || lowerEmail.startsWith('s-') || lowerEmail.startsWith('p-')) {
+      router.push('/platform');
+      return;
+    }
+
+    // Fallback for custom emails: check profile role
     const { data: profile } = await supabase
       .from('profiles')
       .select('role')
       .eq('id', authData.user.id)
-      .single();
+      .maybeSingle();
 
-    // 4. Smart Redirect
-    const isAdmin = profile?.role === 'admin' || formattedEmail === 'admin@xonqa.school' || formattedEmail.startsWith('a-');
-
-    if (isAdmin) {
+    if (profile?.role === 'admin') {
       router.push('/admin/classes');
     } else {
       router.push('/platform');
