@@ -45,7 +45,10 @@ export async function POST(req) {
         { onConflict: 'id' }
       );
 
-    if (profileError) throw profileError;
+    if (profileError) {
+      await adminClient.auth.admin.deleteUser(authData.user.id);
+      throw profileError;
+    }
 
     return NextResponse.json({ success: true, user: authData.user });
   } catch (error) {

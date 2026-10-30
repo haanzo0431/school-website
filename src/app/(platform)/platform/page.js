@@ -58,7 +58,7 @@ export default function PlatformPage() {
             .eq('student_id', user.id),
           supabase
             .from('posts')
-            .select('id, title, category, type, content, author, author_name, created_at')
+            .select('id, title, category, content, author_name, created_at, image_url')
             .order('created_at', { ascending: false })
             .limit(6),
           supabase
