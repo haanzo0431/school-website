@@ -76,20 +76,23 @@ export default function AdminClassManagementPage() {
 
   const fetchInitialData = useCallback(async () => {
     try {
-      const { data: classList } = await supabase
-        .from('classes')
-        .select('*')
-        .order('name', { ascending: true });
+      // Parallelize queries using Promise.all & fetch only required columns
+      const [classRes, profilesRes] = await Promise.all([
+        supabase
+          .from('classes')
+          .select('*')
+          .order('name', { ascending: true }),
+        supabase
+          .from('profiles')
+          .select('id, first_name, surname, name, class_id, class, role, email'),
+      ]);
 
-      const { data: profilesData, error: profErr } = await supabase
-        .from('profiles')
-        .select('*');
-
-      if (profErr) {
-        console.error('Error loading profiles:', profErr);
+      if (profilesRes.error) {
+        console.error('Error loading profiles:', profilesRes.error);
       }
 
-      const profiles = profilesData || [];
+      const classList = classRes.data || [];
+      const profiles = profilesRes.data || [];
       setAllProfiles(profiles);
 
       // Strict filter for students only in dropdowns

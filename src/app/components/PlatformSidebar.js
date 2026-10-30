@@ -56,8 +56,11 @@ export default function PlatformSidebar() {
     ],
   };
 
-  // Authoritative role from database (via UserContext)
-  const currentRole = ['admin', 'teacher', 'parent', 'student'].includes(role) ? role : 'student';
+  // Authoritative role from route context or database (via UserContext)
+  const isAdminRoute = pathname.startsWith('/admin');
+  const currentRole = isAdminRoute
+    ? 'admin'
+    : (['admin', 'teacher', 'parent', 'student'].includes(role) ? role : 'student');
   const links = navLinks[currentRole] || navLinks.student;
 
   const avatarUrl = profile?.avatar_url || profile?.photo_url || profile?.avatar;
@@ -99,7 +102,7 @@ export default function PlatformSidebar() {
         </button>
 
         <div className="space-y-6">
-          <Link href={currentRole === 'admin' ? '/admin' : '/platform'} onClick={closeMenu} className="flex items-center gap-3.5">
+          <Link href={currentRole === 'admin' ? '/admin' : '/platform'} prefetch={false} onClick={closeMenu} className="flex items-center gap-3.5">
             <div className="relative w-12 h-12 rounded-full overflow-hidden border border-emerald-500/30 shrink-0 bg-emerald-500/10 flex items-center justify-center p-0.5">
               <Image
                 src="/school_logo.png"
@@ -129,6 +132,7 @@ export default function PlatformSidebar() {
                 <Link
                   key={item.href}
                   href={item.href}
+                  prefetch={false}
                   onClick={closeMenu}
                   className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors ${
                     isActive
@@ -148,6 +152,7 @@ export default function PlatformSidebar() {
           {currentRole === 'teacher' && (
             <Link
               href="/editor"
+              prefetch={false}
               onClick={closeMenu}
               className="flex items-center justify-center gap-2 w-full py-2.5 px-4 mb-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition-all shadow-md cursor-pointer"
             >
@@ -159,6 +164,7 @@ export default function PlatformSidebar() {
           <div className="pt-4 border-t theme-border space-y-1">
             <Link
               href="/profile"
+              prefetch={false}
               onClick={closeMenu}
               className="group flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-emerald-500/40 hover:bg-emerald-500/10 hover:shadow-[0_0_15px_rgba(16,185,129,0.18)] transition-all duration-200 cursor-pointer"
             >
