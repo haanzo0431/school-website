@@ -89,6 +89,37 @@ export default function AttendancePage() {
     }
   }, [selectedClass, selectedDate]);
 
+  // Realtime attendance sync via Supabase Free Tier Realtime
+  useEffect(() => {
+    if (!selectedDate) return;
+
+    const channelName = `realtime-attendance-${selectedDate}`;
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'attendance',
+          filter: `date=eq.${selectedDate}`,
+        },
+        (payload) => {
+          if (payload.new && payload.new.student_id && payload.new.status) {
+            setAttendance((prev) => ({
+              ...prev,
+              [payload.new.student_id]: payload.new.status,
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [selectedDate]);
+
   // Load students and existing attendance when class or date changes
   useEffect(() => {
     if (userLoading || !isTeacherOrAdmin) return;
@@ -99,7 +130,7 @@ export default function AttendancePage() {
     return () => { isMounted = false; };
   }, [userLoading, isTeacherOrAdmin, fetchData]);
 
-  // Toggle status for a single student
+  // Toggle status for a single student (0ms optimistic UI update)
   const handleStatusChange = (studentId, status) => {
     setAttendance((prev) => ({
       ...prev,
@@ -107,7 +138,7 @@ export default function AttendancePage() {
     }));
   };
 
-  // Bulk action: Mark all students as present/absent
+  // Bulk action: Mark all students as present/absent (0ms optimistic UI update)
   const handleMarkAll = (status) => {
     const updated = {};
     students.forEach((s) => {
@@ -143,13 +174,47 @@ export default function AttendancePage() {
 
       if (error) throw error;
 
-      setToastMessage({ type: 'success', text: 'Attendance saved successfully!' });
+      // Identify absent students to notify parents (strictly absence only, no late noise)
+      const absentStudentIds = students
+        .filter((s) => attendance[s.id] === 'absent')
+        .map((s) => s.id);
+
+      let absenceAlertSent = false;
+      if (absentStudentIds.length > 0) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const notifyRes = await fetch('/api/notifications/absence', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            },
+            body: JSON.stringify({
+              studentIds: absentStudentIds,
+              className: selectedClass,
+              date: selectedDate,
+            }),
+          });
+          if (notifyRes.ok) {
+            absenceAlertSent = true;
+          }
+        } catch (notifyErr) {
+          console.warn('[Attendance] Absence notification warning:', notifyErr);
+        }
+      }
+
+      setToastMessage({
+        type: 'success',
+        text: absenceAlertSent
+          ? `Davomat saqlandi! ${absentStudentIds.length} ta dars qoldirgan o'quvchi bo'yicha xabarnoma yuborildi.`
+          : 'Davomat muvaffaqiyatli saqlandi!',
+      });
     } catch (error) {
       console.error('Failed to save attendance:', error.message);
-      setToastMessage({ type: 'error', text: 'Failed to save attendance records.' });
+      setToastMessage({ type: 'error', text: 'Davomatni saqlashda xatolik yuz berdi.' });
     } finally {
       setSaving(false);
-      setTimeout(() => setToastMessage(null), 3000);
+      setTimeout(() => setToastMessage(null), 4000);
     }
   };
 

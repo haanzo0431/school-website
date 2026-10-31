@@ -138,8 +138,22 @@ export default function AdminClassManagementPage() {
       await fetchInitialData();
     }
     init();
+
+    // Realtime channel sync for class updates across admin sessions
+    const channel = supabase
+      .channel('realtime-classes-admin')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'classes' },
+        () => {
+          if (isMounted) fetchInitialData();
+        }
+      )
+      .subscribe();
+
     return () => {
       isMounted = false;
+      supabase.removeChannel(channel);
     };
   }, [fetchInitialData]);
 
@@ -241,14 +255,27 @@ export default function AdminClassManagementPage() {
     }
   }
 
-  // Assign an existing student profile to the selected class
+  // Assign an existing student profile to the selected class (0ms Optimistic UI)
   async function handleAssignExistingStudent() {
     if (!selectedStudentToAssign || !selectedClass) return;
 
-    setSaving(true);
+    const studentToAssign = selectedStudentToAssign;
     const cleanedClassName = cleanName(selectedClass.name);
+    setSelectedStudentToAssign('');
 
-    // Attempt updating both class and class_id
+    // 0ms Optimistic UI update: immediately move student in local state
+    const previousProfiles = [...allProfiles];
+    setAllProfiles((prev) =>
+      prev.map((p) =>
+        p.id === studentToAssign
+          ? { ...p, class: cleanedClassName, class_id: selectedClass.id, role: 'student' }
+          : p
+      )
+    );
+
+    setMessage({ type: 'success', text: `Student assigned to Class ${cleanedClassName}!` });
+
+    // Background database sync
     let { error } = await supabase
       .from('profiles')
       .update({ 
@@ -256,7 +283,7 @@ export default function AdminClassManagementPage() {
         class_id: selectedClass.id,
         role: 'student'
       })
-      .eq('id', selectedStudentToAssign);
+      .eq('id', studentToAssign);
 
     // Fallback if class_id column does not exist in schema
     if (error && error.message?.includes('class_id')) {
@@ -266,31 +293,39 @@ export default function AdminClassManagementPage() {
           class: cleanedClassName,
           role: 'student'
         })
-        .eq('id', selectedStudentToAssign);
+        .eq('id', studentToAssign);
       error = fallback.error;
     }
 
-    if (!error) {
-      setMessage({ type: 'success', text: `Student assigned to Class ${cleanedClassName}!` });
-      setSelectedStudentToAssign('');
-      await fetchInitialData();
-    } else {
+    if (error) {
       console.error('Assign Error:', error);
+      // Rollback to previous state on failure
+      setAllProfiles(previousProfiles);
       setMessage({ type: 'error', text: `Failed to assign student: ${error.message || 'Permission denied'}` });
     }
-    setSaving(false);
+
     setTimeout(() => setMessage(null), 4000);
   }
 
-  // Remove/Unassign student from class
+  // Remove/Unassign student from class (0ms Optimistic UI)
   async function handleRemoveFromClass(studentId, studentName) {
     if (!confirm(`Are you sure you want to remove ${studentName || 'this student'} from Class ${cleanName(selectedClass?.name)}?`)) {
       return;
     }
 
-    setSaving(true);
+    // 0ms Optimistic UI update: immediately remove from local roster
+    const previousProfiles = [...allProfiles];
+    setAllProfiles((prev) =>
+      prev.map((p) =>
+        p.id === studentId
+          ? { ...p, class: null, class_id: null }
+          : p
+      )
+    );
 
-    // Attempt clearing both class and class_id
+    setMessage({ type: 'success', text: 'Student removed from class.' });
+
+    // Background database sync
     let { error } = await supabase
       .from('profiles')
       .update({ 
@@ -308,14 +343,13 @@ export default function AdminClassManagementPage() {
       error = fallback.error;
     }
 
-    if (!error) {
-      setMessage({ type: 'success', text: 'Student removed from class.' });
-      await fetchInitialData();
-    } else {
+    if (error) {
       console.error('Remove Error:', error);
+      // Rollback to previous state on failure
+      setAllProfiles(previousProfiles);
       setMessage({ type: 'error', text: `Failed to remove student: ${error.message || 'Permission denied'}` });
     }
-    setSaving(false);
+
     setTimeout(() => setMessage(null), 4000);
   }
 

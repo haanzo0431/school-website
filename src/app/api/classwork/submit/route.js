@@ -3,36 +3,32 @@ import { verifyCaller } from '@/lib/serverAuth';
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const activeSubmissions = new Set();
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function POST(req) {
   let userIdForLock = null;
   try {
-    // 1. Authenticate caller (Must be logged in)
-    const authCheck = await verifyCaller(req);
+    const authCheck = await verifyCaller(req, ['student', 'admin']);
     if (authCheck.error) {
       return NextResponse.json({ error: authCheck.error }, { status: authCheck.status });
     }
 
     const { user, profile, adminClient } = authCheck;
-    const role = profile.role || 'student';
-    if (role !== 'student' && role !== 'admin') {
-      return NextResponse.json(
-        { error: 'Faqat o\'quvchilar test topshirishi mumkin.' },
-        { status: 403 }
-      );
-    }
 
     const body = await req.json().catch(() => null);
-    if (!body) {
+    if (!body || typeof body !== 'object') {
       return NextResponse.json({ error: 'Invalid JSON request payload.' }, { status: 400 });
     }
 
     const { testId, answers, lessonDate } = body;
-    if (!testId || !answers || typeof answers !== 'object') {
-      return NextResponse.json({ error: 'Missing testId or answers payload.' }, { status: 400 });
+    if (!testId || typeof testId !== 'string' || testId.trim().length === 0 || testId.length > 100) {
+      return NextResponse.json({ error: 'Valid testId is required.' }, { status: 400 });
+    }
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers) || Object.keys(answers).length > 100) {
+      return NextResponse.json({ error: 'Invalid answers payload (max 100 answers).' }, { status: 400 });
     }
 
-    // Concurrency lock per student to prevent race condition bypassing 3-attempt ceiling
+    // In-memory concurrency guard per student
     if (activeSubmissions.has(user.id)) {
       return NextResponse.json(
         { error: 'Urinish yuborilmoqda, iltimos kuting.' },
@@ -42,29 +38,37 @@ export async function POST(req) {
     activeSubmissions.add(user.id);
     userIdForLock = user.id;
 
-    // 2. Fetch the test details
+    // Fetch test details
     const { data: test, error: testErr } = await adminClient
       .from('classwork_tests')
-      .select('*')
-      .eq('id', testId)
+      .select('id, teacher_id, subject, test_date')
+      .eq('id', testId.trim())
       .maybeSingle();
 
     if (testErr || !test) {
       return NextResponse.json({ error: 'Test topilmadi.' }, { status: 404 });
     }
 
-    const targetDate = test.test_date || lessonDate;
+    // Strict date validation: prevent bypassing attempt limit with arbitrary strings
+    let targetDate = test.test_date;
+    if (!targetDate && lessonDate && typeof lessonDate === 'string' && DATE_REGEX.test(lessonDate.trim())) {
+      targetDate = lessonDate.trim();
+    }
+    if (!targetDate) {
+      targetDate = new Date().toISOString().slice(0, 10);
+    }
 
-    // 3. Attempt Limit Verification: max 3 attempts per student per teacher on this date
+    // Attempt ceiling check (max 3)
     const { data: existingAttempts, error: attErr } = await adminClient
       .from('classwork_attempts')
-      .select('id, attempt_no')
+      .select('id')
       .eq('student_id', user.id)
       .eq('teacher_id', test.teacher_id)
       .eq('lesson_date', targetDate);
 
     if (attErr) {
-      return NextResponse.json({ error: attErr.message }, { status: 500 });
+      console.error('[classwork-submit] Attempt check error:', attErr);
+      return NextResponse.json({ error: 'Server xatoligi yuz berdi.' }, { status: 500 });
     }
 
     const attemptCount = existingAttempts?.length || 0;
@@ -75,23 +79,21 @@ export async function POST(req) {
       );
     }
 
-    // 4. Server-side fetch of questions WITH authoritative correct answers
+    // Server-side questions & grading (answers never sent to client)
     const { data: questions, error: qErr } = await adminClient
       .from('classwork_test_questions')
       .select('id, position, correct')
-      .eq('test_id', testId)
+      .eq('test_id', test.id)
       .order('position', { ascending: true });
 
     if (qErr || !questions || questions.length === 0) {
       return NextResponse.json({ error: 'Ushbu test uchun savollar topilmadi.' }, { status: 404 });
     }
 
-    // 5. Server-side grading (tamper-proof)
     let correctCount = 0;
     const total = questions.length;
 
     questions.forEach((q, i) => {
-      // Support answer by 0-based index, question ID, or 1-based position
       const chosen =
         answers[i] !== undefined
           ? answers[i]
@@ -104,10 +106,8 @@ export async function POST(req) {
       }
     });
 
-    // 6-point scale
     const score = total > 0 ? round1((correctCount / total) * 6) : 0;
 
-    // 6. Record verified attempt in database
     const { data: attemptRecord, error: insertErr } = await adminClient
       .from('classwork_attempts')
       .insert([{
@@ -122,7 +122,8 @@ export async function POST(req) {
       .single();
 
     if (insertErr) {
-      return NextResponse.json({ error: insertErr.message }, { status: 500 });
+      console.error('[classwork-submit] Insert attempt error:', insertErr);
+      return NextResponse.json({ error: 'Natijani saqlashda xatolik yuz berdi.' }, { status: 500 });
     }
 
     return NextResponse.json({
@@ -133,8 +134,8 @@ export async function POST(req) {
       attempt: attemptRecord,
     });
   } catch (err) {
-    console.error('Classwork submission error:', err);
-    return NextResponse.json({ error: err.message || 'Server xatoligi' }, { status: 500 });
+    console.error('[classwork-submit] Error:', err);
+    return NextResponse.json({ error: 'Server xatoligi yuz berdi.' }, { status: 500 });
   } finally {
     if (userIdForLock) {
       activeSubmissions.delete(userIdForLock);

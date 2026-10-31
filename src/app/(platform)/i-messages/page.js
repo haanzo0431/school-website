@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   MessageSquare, Send, User, 
-  Search, CheckCheck, Clock 
+  Search, CheckCheck, Clock, Radio
 } from 'lucide-react';
+import { supabase } from '@/app/supabase';
+import { useUser } from '@/app/context/UserContext';
 
 const CONVERSATIONS = [
   {
@@ -48,26 +50,59 @@ const INITIAL_MESSAGES = {
 };
 
 export default function ParentMessagesPage() {
+  const { user, profile, role } = useUser();
   const [activeChat, setActiveChat] = useState(CONVERSATIONS[0]);
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [inputText, setInputText] = useState('');
 
   const currentChatMessages = messages[activeChat.id] || [];
+  const senderRole = role === 'teacher' ? 'teacher' : 'parent';
+
+  // Supabase Realtime broadcast channel for live messaging
+  useEffect(() => {
+    const channel = supabase
+      .channel('realtime-messages-room')
+      .on('broadcast', { event: 'new-message' }, (payload) => {
+        if (payload?.payload?.chatId && payload?.payload?.message) {
+          const { chatId, message } = payload.payload;
+          setMessages((prev) => ({
+            ...prev,
+            [chatId]: [...(prev[chatId] || []), message],
+          }));
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
 
     const newMsg = {
-      sender: 'parent',
-      text: inputText,
+      sender: senderRole,
+      text: inputText.trim(),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
+    // 0ms Optimistic UI update
     setMessages((prev) => ({
       ...prev,
       [activeChat.id]: [...(prev[activeChat.id] || []), newMsg],
     }));
+
+    // Broadcast live to open parent / teacher windows via Supabase Realtime
+    supabase.channel('realtime-messages-room').send({
+      type: 'broadcast',
+      event: 'new-message',
+      payload: {
+        chatId: activeChat.id,
+        message: newMsg,
+      },
+    });
 
     setInputText('');
   };
@@ -75,11 +110,17 @@ export default function ParentMessagesPage() {
   return (
     <div className="p-6 md:p-10 max-w-6xl mx-auto space-y-6">
       {/* Header */}
-      <div className="border-b theme-border pb-4">
-        <h1 className="text-3xl font-serif font-bold">Teacher Messages</h1>
-        <p className="text-xs theme-text-secondary mt-1">
-          Direct messaging channel between parents and course instructors.
-        </p>
+      <div className="border-b theme-border pb-4 flex flex-col md:flex-row md:items-center justify-between gap-2">
+        <div>
+          <h1 className="text-3xl font-serif font-bold">Teacher Messages</h1>
+          <p className="text-xs theme-text-secondary mt-1">
+            Direct messaging channel between parents and course instructors.
+          </p>
+        </div>
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-mono font-semibold self-start md:self-auto">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Live Realtime Sync</span>
+        </div>
       </div>
 
       {/* Main Chat Interface Layout */}

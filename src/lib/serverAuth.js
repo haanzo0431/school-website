@@ -1,41 +1,47 @@
 import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
 
+let cachedAdminClient = null;
+
 export function getSupabaseAdmin() {
+  if (cachedAdminClient) return cachedAdminClient;
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!url || !serviceKey) {
-    throw new Error('Supabase admin environment variables (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) are missing.');
+    console.error('[serverAuth] Supabase admin environment variables are missing.');
+    throw new Error('CONFIG_MISSING');
   }
 
-  return createClient(url, serviceKey, {
+  cachedAdminClient = createClient(url, serviceKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
     },
   });
+  return cachedAdminClient;
 }
 
 /**
- * Verifies the caller JWT from Authorization header or cookie,
+ * Verifies caller JWT from Authorization header or cookie,
  * checks their profile in Supabase, and verifies their role.
  *
  * @param {Request} req - Incoming Next.js request
- * @param {string|null} requiredRole - e.g. 'admin', 'teacher', 'student'
+ * @param {string|string[]|null} requiredRole - e.g. 'admin', ['teacher', 'admin'], etc.
  * @returns {Promise<{ user: any, profile: any, adminClient: any, error?: string, status?: number }>}
  */
 export async function verifyCaller(req, requiredRole = null) {
   let adminClient;
   try {
     adminClient = getSupabaseAdmin();
-  } catch (err) {
-    return { error: err.message, status: 500 };
+  } catch {
+    return { error: 'Authentication service temporarily unavailable.', status: 500 };
   }
 
   let user = null;
 
-  // 1. Extract Bearer token from Authorization header
+  // 1. Authoritative: Bearer token from Authorization header
   const authHeader = req.headers.get('authorization') || '';
   if (authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7).trim();
@@ -47,7 +53,7 @@ export async function verifyCaller(req, requiredRole = null) {
     }
   }
 
-  // 2. If token not in header, attempt to verify from session cookies via @supabase/ssr
+  // 2. Fallback: Session cookie via @supabase/ssr
   if (!user) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -74,72 +80,38 @@ export async function verifyCaller(req, requiredRole = null) {
           user = data.user;
         }
       } catch {
-        // Fallback to next step
-      }
-    }
-  }
-
-  // 3. Fallback: manual cookie token extraction
-  if (!user) {
-    const cookieHeader = req.headers.get('cookie') || '';
-    if (cookieHeader) {
-      const cookies = Object.fromEntries(
-        cookieHeader
-          .split(';')
-          .map((c) => c.trim().split('='))
-          .filter(([k]) => !!k)
-          .map(([k, ...v]) => [k, decodeURIComponent(v.join('='))])
-      );
-
-      for (const [key, value] of Object.entries(cookies)) {
-        if (key.includes('-auth-token') || key.endsWith('access-token')) {
-          let token = null;
-          try {
-            const parsed = JSON.parse(value);
-            if (Array.isArray(parsed) && parsed[0]) {
-              token = parsed[0];
-            } else if (parsed?.access_token) {
-              token = parsed.access_token;
-            }
-          } catch {
-            if (value && value.length > 30 && !value.startsWith('base64-')) {
-              token = value;
-            }
-          }
-          if (token) {
-            const { data } = await adminClient.auth.getUser(token);
-            if (data?.user) {
-              user = data.user;
-              break;
-            }
-          }
-        }
+        // Fallback gracefully
       }
     }
   }
 
   if (!user) {
-    return { error: 'Unauthorized: Authentication token is required.', status: 401 };
+    return { error: 'Unauthorized: Authentication required.', status: 401 };
   }
 
-  // 4. Fetch authoritative profile from database
+  // 3. Fetch authoritative profile from database
   const { data: profile, error: profileError } = await adminClient
     .from('profiles')
-    .select('*')
+    .select('id, role, first_name, surname, name, email')
     .eq('id', user.id)
     .maybeSingle();
 
   if (profileError || !profile) {
-    return { error: 'Unauthorized: User profile does not exist.', status: 403 };
+    return { error: 'Forbidden: Account profile not found.', status: 403 };
   }
 
-  // 5. Role check (authoritative from profiles table)
+  // 4. Role check (authoritative from profiles table, supporting array or string)
   if (requiredRole) {
-    const role = profile.role || 'student';
-    const isAllowed = role === requiredRole || role === 'admin';
+    const userRole = (profile.role || 'student').toLowerCase().trim();
+    const allowedRoles = Array.isArray(requiredRole)
+      ? requiredRole.map((r) => r.toLowerCase().trim())
+      : [requiredRole.toLowerCase().trim()];
+
+    const isAllowed = userRole === 'admin' || allowedRoles.includes(userRole);
     if (!isAllowed) {
+      const requiredRoleLabel = Array.isArray(requiredRole) ? requiredRole.join(' or ') : requiredRole;
       return {
-        error: `Forbidden: Action requires role "${requiredRole}". Your role is "${role}".`,
+        error: `Forbidden: Action requires role "${requiredRoleLabel}".`,
         status: 403,
       };
     }

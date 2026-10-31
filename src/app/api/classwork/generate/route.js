@@ -2,18 +2,18 @@ import { NextResponse } from 'next/server';
 import { verifyCaller } from '@/lib/serverAuth';
 
 const Q_COUNT = 30;
+const MAX_HTML_SIZE = 2 * 1024 * 1024; // 2 MB ceiling
 
-// HTML fayl ichidagi "var Q=[[savol,[variantlar],to'g'ri],...];" ni o'qiydi
 function extractQuestionsFromHtml(html) {
-  if (!html || typeof html !== 'string') return null;
+  if (!html || typeof html !== 'string' || html.length > MAX_HTML_SIZE) return null;
   const m = html.match(/var\s+Q\s*=\s*(\[[\s\S]*?\])\s*;/);
   if (!m) return null;
   try {
     const arr = JSON.parse(m[1]);
     if (!Array.isArray(arr) || arr.length === 0) return null;
     const qs = arr.map((x) => ({
-      question: String(x[0] || ''),
-      options: Array.isArray(x[1]) ? x[1].map(String) : [],
+      question: String(x[0] || '').slice(0, 500),
+      options: Array.isArray(x[1]) ? x[1].slice(0, 4).map((opt) => String(opt || '').slice(0, 300)) : [],
       correct: Number.isInteger(x[2]) ? x[2] : 0,
     }));
     const valid = qs.every(
@@ -25,10 +25,9 @@ function extractQuestionsFromHtml(html) {
   }
 }
 
-// Fallback topic/subject structured question generator
 function generateSubjectQuestions(subject, topic, count = Q_COUNT) {
-  const safeTopic = topic ? topic.trim() : `${subject} asosiy tushunchalari`;
-  const safeSubject = subject || 'Umumiy';
+  const safeTopic = topic ? topic.trim().slice(0, 150) : `${subject} asosiy tushunchalari`;
+  const safeSubject = subject ? subject.slice(0, 80) : 'Umumiy';
 
   const questions = [];
   for (let i = 1; i <= count; i++) {
@@ -39,9 +38,7 @@ function generateSubjectQuestions(subject, topic, count = Q_COUNT) {
       `${safeTopic} qo'llanilishiga oid 3-amaliy natija`,
       `${safeTopic} mavzusidagi 4-muhim ta'rif`,
     ];
-    // Rotate to make correctIdx accurate
-    const correctText = `${safeTopic}: ${i}-savol uchun to'g'ri ilmiy ta'rif va asos`;
-    options[correctIdx] = correctText;
+    options[correctIdx] = `${safeTopic}: ${i}-savol uchun to'g'ri ilmiy ta'rif va asos`;
 
     questions.push({
       question: `${safeSubject} - ${safeTopic}: ${i}-savol. Ushbu mavzuning mohiyatini belgilovchi to'g'ri bandni aniqlang:`,
@@ -54,13 +51,16 @@ function generateSubjectQuestions(subject, topic, count = Q_COUNT) {
 
 export async function POST(req) {
   try {
-    // 1. Authorize: Only teachers and admins can generate classwork
-    const authCheck = await verifyCaller(req, 'teacher');
+    const authCheck = await verifyCaller(req, ['teacher', 'admin']);
     if (authCheck.error) {
       return NextResponse.json({ error: authCheck.error }, { status: authCheck.status });
     }
 
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid JSON request payload.' }, { status: 400 });
+    }
+
     const { subject, topic, lessonHtml } = body;
 
     if (!subject && !topic && !lessonHtml) {
@@ -70,13 +70,13 @@ export async function POST(req) {
       );
     }
 
-    // 2. If lesson HTML is provided, extract embedded questions
+    const cleanSubject = typeof subject === 'string' ? subject.trim().slice(0, 100) : '';
+    const cleanTopic = typeof topic === 'string' ? topic.trim().slice(0, 200) : '';
+
     let questions = extractQuestionsFromHtml(lessonHtml);
 
-    // 3. If no HTML questions, generate from subject & topic
     if (!questions || questions.length < Q_COUNT) {
-      const generated = generateSubjectQuestions(subject, topic, Q_COUNT);
-      // If some questions were parsed from HTML, combine or fill up to Q_COUNT
+      const generated = generateSubjectQuestions(cleanSubject, cleanTopic, Q_COUNT);
       if (questions && questions.length > 0) {
         questions = [...questions, ...generated.slice(questions.length, Q_COUNT)];
       } else {
@@ -90,9 +90,9 @@ export async function POST(req) {
       questions,
     });
   } catch (error) {
-    console.error('Classwork generate error:', error);
+    console.error('[classwork-generate] Error:', error);
     return NextResponse.json(
-      { error: error.message || 'Savollarni yaratishda xatolik yuz berdi.' },
+      { error: 'Savollarni yaratishda xatolik yuz berdi.' },
       { status: 500 }
     );
   }
